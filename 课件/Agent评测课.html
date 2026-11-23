@@ -1,0 +1,2319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent 评测</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  --bg: #ffffff;
+  --bg-soft: #f7f7f8;
+  --border: #e6e6e6;
+  --grid: rgba(17,17,17,0.035);
+  --text: #111111;
+  --text-secondary: #6b7280;
+  --text-meta: #b3b3b3;
+  --text-faint: #f0f0f2;
+  --accent: #00e75e;
+  --warn: #d93025;
+  /* 侧边栏宽 = 4 个网格单元（64×4），右边框正好落在画布网格线上 */
+  --sidebar-w: 256px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  font-family: 'Inter', 'Noto Sans SC', 'PingFang SC', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  color: var(--text);
+}
+
+/* ===== 固定舞台：1920×1080 等比缩放 ===== */
+.stage {
+  position: fixed;
+  top: 50%; left: 50%;
+  width: 1920px; height: 1080px;
+  transform: translate(-50%, -50%) scale(var(--scale, 1));
+  transform-origin: center center;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+/* 画布网格：64px 细网格线 */
+.stage::before {
+  content: '';
+  position: absolute; inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, var(--grid) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
+  background-size: 64px 64px;
+  z-index: 0;
+}
+/* 网格交点十字标记 */
+.stage::after {
+  content: '';
+  position: absolute; inset: 0;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='256' height='256'%3E%3Cpath d='M128 121v14M121 128h14' stroke='%23111111' stroke-opacity='0.14' stroke-width='1'/%3E%3C/svg%3E");
+  background-size: 256px 256px;
+  z-index: 0;
+}
+
+/* 右缘斜纹装饰条（左缘被侧边栏占据） */
+.frame.right {
+  position: absolute; top: 0; bottom: 0; right: 0;
+  width: 18px;
+  background: repeating-linear-gradient(45deg, rgba(17,17,17,0.05) 0 1px, transparent 1px 7px);
+  border-left: 1px solid var(--border);
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* ===== 左侧侧边栏：logo + 目录树 =====
+   完全无线（用户裁定）：无横向分割线、无右侧竖边框；白底静默覆盖网格，分区只靠留白 */
+.sidebar {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: var(--sidebar-w);
+  background: var(--bg);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+}
+/* logo 区：高 128px（logo 中心与右侧页眉行同高），无下边线 */
+.sidebar .brand {
+  height: 128px;
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  flex-shrink: 0;
+}
+.sidebar .brand svg { display: block; height: 42px; width: auto; }
+
+.toc {
+  flex: 1;
+  padding: 6px 12px 18px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;          /* 修订 w：目录列满每页时可滚动 */
+  scrollbar-width: none;
+}
+.toc::-webkit-scrollbar { display: none; }
+.toc-item {
+  /* 修订 aj：目录项的「文字垂直居中」需要解决三个独立 bug——
+     ① flex-shrink:0：.toc 是 flex column，目录项超出容器时会被等比压缩到 ~23px，line-height 形同虚设
+     ② line-height:1.65：1.4 (21px) 不够 Inter 字体 g/j/p/q/y 的 descender，会被 overflow:hidden 切掉
+        （肉眼现象：「Vibe Coding」最后的 g 看起来像 a）
+     ③ padding 9/5 不对称：Inter baseline 偏低 + CJK em-box 视觉重心比 Latin cap-height 低，
+        混排时即使 padding 对称文字也偏上 ~2px——补偿成顶 9 / 底 5，视觉上才居中 */
+  flex-shrink: 0;
+  display: block;
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--text-secondary);
+  padding: 9px 14px 5px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.toc-item:hover { background: var(--bg-soft); color: var(--text); }
+/* 章节节点：mono 小标签 */
+.toc-item.ch {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--text-meta);
+  margin-top: 14px;
+}
+.toc-item.ch:hover { color: var(--text); }
+/* 子页：缩进 */
+.toc-item.sub { padding-left: 30px; }
+/* 当前页：黑色胶囊（与章节胶囊同语言） */
+.toc-item.active { background: var(--text); color: #fff; }
+.toc-item.ch.active { background: var(--text); color: #fff; }
+
+/* ===== 右下角实时读数 ===== */
+.corner-meta {
+  position: absolute;
+  bottom: 36px; right: 60px;   /* 修订 y：读数外挪，给内容让位并与外扩对齐线呼应 */
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  letter-spacing: 1px;
+  color: var(--text-meta);
+  z-index: 3;
+  pointer-events: none;
+}
+
+/* ===== 翻页过渡：方向感知水平推移 =====
+   对齐纪律：内容对齐线 384px（64×6 网格线）；标题固定基线 190px */
+.slide {
+  position: absolute; inset: 0;
+  padding: 190px 120px 110px 384px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: flex-start;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateX(var(--dx, 24px));
+  transition: opacity 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+              transform 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+              visibility 0s linear 0.4s;
+  z-index: 1;
+}
+.slide.active {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition: opacity 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+              transform 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+              visibility 0s;
+  z-index: 1;
+}
+
+/* ===== 文字层级 ===== */
+.display { font-weight: 700; letter-spacing: -0.02em; color: var(--text); }
+.mono { font-family: 'JetBrains Mono', monospace; }
+
+.h-xxl { font-size: 140px; line-height: 1.05; }
+.h-l   { font-size: 92px;  line-height: 1.1; }
+.h-m   { font-size: 68px;  line-height: 1.18; }
+
+.body-xl { font-size: 39px; line-height: 1.55; color: var(--text-secondary); font-weight: 400; }
+.body-l  { font-size: 32px; line-height: 1.6;  color: var(--text-secondary); font-weight: 400; }
+.body-m  { font-size: 26px; line-height: 1.65; color: var(--text-secondary); font-weight: 400; }
+.body-xl strong, .body-l strong, .body-m strong { color: var(--text); font-weight: 600; }
+
+.eyebrow {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 18px; font-weight: 600;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 36px;
+}
+
+.hl { color: var(--accent); font-weight: 700; }
+
+/* ===== 页眉：悬浮在画布上，垂直中心与侧边栏 logo 同高（y=64） ===== */
+.slide-header {
+  position: absolute;
+  top: 0; height: 128px; left: 384px; right: 120px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  letter-spacing: 1.5px;
+  color: var(--text-meta);
+  text-transform: uppercase;
+  font-weight: 500;
+  pointer-events: none;
+}
+
+/* ===== 章节页 ===== */
+.chapter {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: flex-start;
+  position: relative;
+  z-index: 1;
+}
+.chapter .num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 18px; font-weight: 600;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: #fff;
+  background: var(--text);
+  padding: 12px 24px;
+  border-radius: 100px;
+  margin-bottom: 48px;
+}
+.chapter .title { font-size: 130px; line-height: 1.05; font-weight: 700; letter-spacing: -0.02em; }
+.chapter .sub {
+  font-size: 38px;
+  color: var(--text-secondary);
+  margin-top: 36px;
+  font-weight: 400;
+}
+/* 章节页大数字水印：右缘对齐内容网格，底边在元数据带之上 */
+.chapter-watermark {
+  position: absolute;
+  right: 120px; bottom: 96px;
+  font-size: 520px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  color: var(--text-faint);
+  pointer-events: none;
+  user-select: none;
+  z-index: 0;
+}
+
+/* ===== 卡片 ===== */
+.card {
+  background: var(--bg);
+  border: 1.5px solid var(--border);
+  border-radius: 20px;
+  padding: 52px 56px;
+}
+.card.soft { background: var(--bg-soft); border: none; }
+.card-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 16px; font-weight: 600;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: var(--text-meta);
+  margin-bottom: 22px;
+}
+
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; width: 100%; }
+.three-col { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; width: 100%; }
+
+/* ===== 列表 ===== */
+.bullet-list { list-style: none; margin-top: 16px; }
+.bullet-list li {
+  font-size: 32px; line-height: 1.6;
+  color: var(--text-secondary);
+  padding: 16px 0 16px 40px;
+  position: relative;
+}
+.bullet-list li::before {
+  content: '';
+  position: absolute;
+  left: 0; top: 37px;
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--text);
+}
+.bullet-list li strong { color: var(--text); font-weight: 600; }
+
+/* ===== 右侧锚点 ===== */
+.side-anchor {
+  position: absolute;
+  right: 120px; top: 50%;
+  transform: translateY(-50%);
+  width: 480px;
+  z-index: 0;
+}
+.anchor-num {
+  font-size: 440px; font-weight: 700;
+  line-height: 0.9;
+  letter-spacing: -0.04em;
+  color: var(--text-faint);
+  text-align: right;
+  user-select: none;
+}
+.anchor-card {
+  background: var(--bg);
+  border: 1.5px solid var(--border);
+  border-radius: 24px;
+  padding: 48px 52px;
+}
+.anchor-card .k {
+  font-size: 48px; font-weight: 700; line-height: 1.25;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.anchor-card .k em { font-style: normal; color: var(--accent); }
+.anchor-card .v {
+  font-size: 23px; line-height: 1.6;
+  color: var(--text-secondary);
+  margin-top: 20px;
+}
+
+/* ===== 大数字页 ===== */
+.big-stat { text-align: left; }
+.big-stat .num {
+  font-size: 380px; font-weight: 700;
+  line-height: 0.95; letter-spacing: -0.04em;
+  color: var(--text);
+}
+.big-stat .num .unit { font-size: 100px; font-weight: 700; margin-left: 16px; color: var(--text-secondary); }
+.big-stat .label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 24px; letter-spacing: 4px;
+  text-transform: uppercase;
+  color: var(--text-meta);
+  margin-top: 40px; font-weight: 600;
+}
+
+/* ===== 步骤卡 ===== */
+.step-card {
+  background: var(--bg);
+  border: 1.5px solid var(--border);
+  border-radius: 20px;
+  padding: 44px 40px;
+}
+.step-card .step-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 16px; font-weight: 600;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: var(--text-meta);
+}
+.step-card .step-title {
+  font-size: 60px; font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 18px 0 20px; line-height: 1.1;
+  color: var(--text);
+}
+.step-card .step-desc {
+  font-size: 24px; line-height: 1.65;
+  color: var(--text-secondary);
+}
+.step-card .step-desc strong { color: var(--text); font-weight: 600; }
+
+/* ===== 标签（词汇页） ===== */
+.tag-row { display: flex; gap: 16px; flex-wrap: wrap; }
+.tag {
+  font-size: 26px;
+  font-weight: 500;
+  padding: 18px 32px;
+  border-radius: 100px;
+  background: var(--bg);
+  border: 1.5px solid var(--border);
+  color: var(--text);
+  position: relative;
+  cursor: default;
+  transition: border-color 0.2s;
+}
+.tag:hover { border-color: var(--text); }
+.tag.accent { background: var(--text); border-color: var(--text); color: #fff; font-weight: 600; }
+.tag .tag-tooltip {
+  position: absolute;
+  bottom: calc(100% + 16px);
+  left: 50%;
+  transform: translateX(-50%) scale(0.96);
+  background: #1f1f1f;
+  color: #fff;
+  font-size: 20px; font-weight: 400; line-height: 1.55;
+  padding: 24px 28px;
+  border-radius: 16px;
+  width: 430px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1), transform 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 8px 30px rgba(0,0,0,0.18);
+  z-index: 100;
+  text-align: left;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.tag .tag-tooltip::after {
+  content: '';
+  position: absolute;
+  top: 100%; left: 50%;
+  transform: translateX(-50%);
+  border: 9px solid transparent;
+  border-top-color: #1f1f1f;
+}
+.tag:hover .tag-tooltip { opacity: 1; transform: translateX(-50%) scale(1); }
+.tag .tag-tooltip strong { color: #5ef0a0; font-weight: 600; }
+
+/* ===== 公式大字卡 ===== */
+.formula {
+  font-size: 88px; font-weight: 700;
+  letter-spacing: -0.02em;
+  text-align: left;
+  padding: 64px 72px;
+  background: var(--bg);
+  border: 1.5px solid var(--border);
+  border-radius: 24px;
+}
+
+/* ===== 议程行 ===== */
+.agenda-row {
+  display: flex; align-items: baseline; gap: 44px;
+  padding: 22px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.agenda-row:last-child { border-bottom: none; }
+.agenda-row .time {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 20px; font-weight: 600;
+  letter-spacing: 2px;
+  color: var(--text);
+  min-width: 120px;
+  text-transform: uppercase;
+}
+.agenda-row .name { font-size: 32px; font-weight: 600; color: var(--text); min-width: 340px; }
+.agenda-row .note { font-size: 24px; color: var(--text-secondary); }
+.agenda-row.dim .time, .agenda-row.dim .name { color: var(--text-meta); }
+
+/* ===== 翻页控件：悬浮胶囊 ===== */
+.controls {
+  /* 修订 al：原 position:fixed 不受 stage scale 影响——小窗口/投影非 16:9 时控件不缩放、视觉断裂。
+     改 position:absolute 并移进 stage（HTML 顺序在 .stage 末尾），自动跟随 stage scale。
+     注：祖先有 transform 时，子代 position:fixed 会退化为 absolute，干脆显式 absolute 避免混淆。 */
+  position: absolute;
+  bottom: 24px; left: 50%;
+  transform: translateX(-50%);
+  display: flex; align-items: center; gap: 16px;
+  background: rgba(255,255,255,0.9);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  padding: 10px 20px;
+  border-radius: 100px;
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px; letter-spacing: 1px;
+  z-index: 100;
+  opacity: 0.35;
+  transition: opacity 0.3s;
+}
+.controls:hover { opacity: 1; }
+.controls button {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 16px;
+  display: flex; align-items: center; justify-content: center;
+}
+.controls button:hover { background: var(--bg-soft); }
+.counter { min-width: 70px; text-align: center; font-weight: 500; }
+
+.progress {
+  position: fixed;
+  top: 0; left: 0;
+  height: 3px;
+  background: var(--text);
+  z-index: 101;
+  transition: width 0.3s;
+}
+
+/* ===== 打字机光标 ===== */
+.cursor {
+  display: inline-block;
+  width: 3px; height: 1.05em;
+  background: var(--text);
+  margin-left: 5px;
+  vertical-align: -0.12em;
+  animation: blink 1.1s steps(1) infinite;
+}
+@keyframes blink { 50% { opacity: 0; } }
+
+/* ===== 章节页裁切标记 ===== */
+.crop { position: absolute; inset: -48px -64px; pointer-events: none; }
+.crop i { position: absolute; width: 22px; height: 22px; border: 0 solid rgba(17,17,17,0.4); }
+.crop i.tl { left: 0; top: 0; border-left-width: 1.5px; border-top-width: 1.5px; }
+.crop i.tr { right: 0; top: 0; border-right-width: 1.5px; border-top-width: 1.5px; }
+.crop i.bl { left: 0; bottom: 0; border-left-width: 1.5px; border-bottom-width: 1.5px; }
+.crop i.br { right: 0; bottom: 0; border-right-width: 1.5px; border-bottom-width: 1.5px; }
+
+/* ===== 内容页版式（修订 w/x，用户裁定）=====
+   标题顶部左对齐（占用原页眉带，该页页眉只留右侧主题词），
+   内容在标题下方区域纵横双向居中、优先放大；
+   封面/章节页仍走原版左对齐。视频/论文等自明页免标题（center mid）。 */
+.top-title {
+  position: absolute;
+  top: 44px; left: 290px; right: 60px;   /* 修订 y：对齐线外扩，与内容左右边缘对齐 */
+  text-align: left;
+  font-size: 52px; font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--text);
+  z-index: 2;
+}
+.slide.center {
+  padding: 150px 60px 60px 290px;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+/* 内容页页眉与标题/内容共用同一套左右对齐线（290/60） */
+.slide.center .slide-header { left: 290px; right: 60px; }
+.slide.center.mid {
+  /* 修订 z：免标题页的居中基准区 = 页眉带下缘(128) ~ 读数带上方 × 侧边栏右缘 ~ 右缘 */
+  padding: 128px 60px 70px 290px;
+}
+
+/* ===== 工具类 ===== */
+.mt-xl { margin-top: 64px; }
+.mt-l { margin-top: 40px; }
+.mt-m { margin-top: 24px; }
+
+/* ============ 交互流程范式（修订 am）============
+   红线复用：交互容器深底 #1f1f1f / 白卡 + border 二选一（按是否需要画线决定）；
+   按钮一律黑胶囊 mono；--accent 仅 1 处（current 步的副标或 console 行首符）；
+   默认显示终局/初态（preview），点按钮才动——禁止进页自动播放消耗资源。
+   四种范式均自动绑定：找到 .anim-ide / .anim-arch / .anim-loop / .anim-pipe 容器即生效。 */
+
+/* ---- 通用 ---- */
+.anim-ide, .anim-arch, .anim-loop, .anim-pipe {
+  width: 100%; max-width: 1480px;
+  display: flex; flex-direction: column; gap: 24px;
+}
+.anim-controls {
+  display: flex; align-items: center; gap: 14px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px; letter-spacing: 1px;
+  color: var(--text-secondary);
+}
+.anim-btn {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px; font-weight: 500; letter-spacing: 1.5px;
+  padding: 12px 22px; border-radius: 100px;
+  background: var(--bg); border: 1.5px solid var(--border); color: var(--text);
+  cursor: pointer; transition: background 0.15s, border-color 0.15s;
+}
+.anim-btn:hover { border-color: var(--text); }
+.anim-btn.primary { background: var(--text); color: #fff; border-color: var(--text); }
+.anim-btn.primary:hover { background: #000; }
+.anim-step { margin-left: auto; color: var(--text-meta); font-weight: 600; }
+
+/* ---- A. IDE 代码回放 ---- */
+.anim-ide .ide-bar { background: #2a2a2a; border-radius: 16px 16px 0 0; padding: 14px 22px; display: flex; align-items: center; gap: 10px; font-family: 'JetBrains Mono', monospace; }
+.anim-ide .ide-dot { width: 12px; height: 12px; border-radius: 50%; background: #444; }
+.anim-ide .ide-file { color: #999; font-size: 14px; margin-left: 18px; letter-spacing: 1px; }
+.anim-ide .ide-body { background: #1f1f1f; border-radius: 0 0 16px 16px; display: grid; grid-template-columns: 1.1fr 0.9fr; min-height: 420px; }
+.anim-ide .ide-code { padding: 28px 32px; font-family: 'JetBrains Mono', monospace; font-size: 22px; line-height: 2; color: #e8e8e8; white-space: pre; overflow: hidden; border-right: 1px solid #2c2c2c; }
+.anim-ide .ide-code .ln { display: block; padding: 0 12px; border-radius: 6px; transition: background 0.2s; }
+.anim-ide .ide-code .ln::before { content: attr(data-l); display: inline-block; width: 28px; color: #555; margin-right: 18px; text-align: right; }
+.anim-ide .ide-code .ln.active { background: rgba(0,231,94,0.10); }
+.anim-ide .ide-code .ln.done { color: #c8c8c8; }
+.anim-ide .ide-code .kw  { color: #c792ea; }
+.anim-ide .ide-code .fn  { color: #82aaff; }
+.anim-ide .ide-code .str { color: #c3e88d; }
+.anim-ide .ide-code .cm  { color: #ffcb6b; }
+.anim-ide .ide-console { display: flex; flex-direction: column; padding: 28px 32px; font-family: 'JetBrains Mono', monospace; }
+.anim-ide .ide-console-hd { font-size: 12px; font-weight: 600; letter-spacing: 3px; color: #777; margin-bottom: 18px; }
+.anim-ide .ide-console-body { flex: 1; font-size: 20px; line-height: 1.7; color: #e8e8e8; }
+.anim-ide .ide-out { opacity: 0; transform: translateY(4px); transition: opacity 0.3s, transform 0.3s; margin-bottom: 8px; }
+.anim-ide .ide-out.show { opacity: 1; transform: none; }
+.anim-ide .ide-out::before { content: '› '; color: var(--accent); }
+
+/* ---- B. 架构图逐节点展开 ---- */
+.anim-arch { background: var(--bg); border: 1.5px solid var(--border); border-radius: 20px; padding: 40px; }
+.anim-arch .arch-svg { width: 100%; height: auto; display: block; }
+.anim-arch .arch-svg .node rect { fill: var(--bg); stroke: var(--border); stroke-width: 1.5; transition: stroke 0.4s, fill 0.4s; }
+.anim-arch .arch-svg .node .nlabel { font-family: 'Inter', 'Noto Sans SC', sans-serif; font-size: 22px; font-weight: 700; fill: var(--text-meta); transition: fill 0.4s; }
+.anim-arch .arch-svg .node .nsub { font-family: 'JetBrains Mono', monospace; font-size: 14px; letter-spacing: 1.5px; fill: var(--text-meta); transition: fill 0.4s; }
+.anim-arch .arch-svg .node.on rect { stroke: var(--text); stroke-width: 2; }
+.anim-arch .arch-svg .node.on .nlabel { fill: var(--text); }
+.anim-arch .arch-svg .node.on .nsub   { fill: var(--text-secondary); }
+.anim-arch .arch-svg .node.current rect { fill: var(--text); stroke: var(--text); }
+.anim-arch .arch-svg .node.current .nlabel { fill: #fff; }
+.anim-arch .arch-svg .node.current .nsub   { fill: #aaa; }
+.anim-arch .arch-svg .edge { stroke: var(--border); fill: none; stroke-width: 2; stroke-dasharray: 600; stroke-dashoffset: 600; transition: stroke 0.6s, stroke-dashoffset 0.6s ease-out; }
+.anim-arch .arch-svg .edge.on { stroke: var(--text); stroke-dashoffset: 0; }
+
+/* ---- C. 循环演示 ---- */
+.anim-loop { background: var(--bg); border: 1.5px solid var(--border); border-radius: 20px; padding: 24px; }
+.anim-loop .loop-svg { width: 100%; max-width: 720px; height: auto; display: block; margin: 0 auto; }
+.anim-loop .loop-svg .lnode rect { fill: var(--bg); stroke: var(--border); stroke-width: 1.5; transition: stroke 0.4s, fill 0.4s, stroke-width 0.4s; }
+.anim-loop .loop-svg .lnode .nlabel { font-family: Inter, sans-serif; font-size: 22px; font-weight: 700; fill: var(--text-meta); transition: fill 0.4s; }
+.anim-loop .loop-svg .lnode .nsub   { font-family: 'JetBrains Mono', monospace; font-size: 14px; letter-spacing: 1.5px; fill: var(--text-meta); transition: fill 0.4s; }
+.anim-loop .loop-svg .lnode.on rect { fill: var(--text); stroke: var(--text); stroke-width: 2; }
+.anim-loop .loop-svg .lnode.on .nlabel { fill: #fff; }
+.anim-loop .loop-svg .lnode.on .nsub   { fill: var(--accent); }
+.anim-loop .loop-svg .loop-edge { stroke: var(--border); fill: none; stroke-width: 2; transition: stroke 0.4s; }
+.anim-loop .loop-svg .loop-edge.on { stroke: var(--text); }
+
+/* ---- D. 分步管线 ---- */
+.anim-pipe .pipe-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.anim-pipe .pipe-stage { flex: 1; background: var(--bg); border: 1.5px solid var(--border); border-radius: 16px; padding: 32px 24px; display: flex; flex-direction: column; align-items: flex-start; gap: 14px; transition: background 0.3s, border-color 0.3s; position: relative; }
+.anim-pipe .pipe-stage .pst-num { font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 600; letter-spacing: 2.5px; color: var(--text-meta); transition: color 0.3s; }
+.anim-pipe .pipe-stage .pst-name { font-size: 36px; font-weight: 700; color: var(--text-secondary); transition: color 0.3s; }
+.anim-pipe .pipe-stage.active { background: var(--text); border-color: var(--text); }
+.anim-pipe .pipe-stage.active .pst-num  { color: var(--accent); }
+.anim-pipe .pipe-stage.active .pst-name { color: #fff; }
+.anim-pipe .pipe-stage.done { background: var(--bg); border-color: var(--text); }
+.anim-pipe .pipe-stage.done .pst-num,
+.anim-pipe .pipe-stage.done .pst-name { color: var(--text); }
+.anim-pipe .pipe-stage.done::after { content: '✓'; position: absolute; top: 18px; right: 22px; font-size: 20px; color: var(--accent); font-weight: 700; }
+.anim-pipe .pipe-arr { font-family: 'JetBrains Mono', monospace; font-size: 24px; color: var(--text-meta); }
+.anim-pipe .pipe-narration { background: #1f1f1f; border-radius: 16px; padding: 32px 36px; color: #fff; }
+.anim-pipe .pn-label { font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 600; letter-spacing: 3px; color: #888; margin-bottom: 14px; }
+.anim-pipe .pn-body { font-size: 26px; line-height: 1.55; }
+.anim-pipe .pn-body strong { color: var(--accent); font-weight: 600; }
+
+/* ============ 本 deck 增补组件（沿用 DESIGN.md token，不新增颜色） ============ */
+.slide.center { padding-bottom: 92px; }   /* 居中基准区下缘让开翻页胶囊 */
+.w { width: 100%; display: flex; flex-direction: column; gap: 28px; text-align: left; }
+.w .two-col, .w .three-col { align-items: stretch; }
+
+.card.c { padding: 40px 44px; }
+.card.v { display: flex; flex-direction: column; }
+.card.mid { display: flex; flex-direction: column; justify-content: center; }
+.card .t { font-size: 48px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.2; color: var(--text); }
+.card .t.s { font-size: 40px; }
+.card .t.xl { font-size: 72px; }
+.card .d { font-size: 26px; line-height: 1.6; color: var(--text-secondary); margin-top: 16px; }
+.card .d.sm { font-size: 24px; }
+.card .d strong { color: var(--text); font-weight: 600; }
+
+.def { font-size: 38px; line-height: 1.5; font-weight: 500; color: var(--text-secondary); }
+.def strong { color: var(--text); font-weight: 700; }
+
+.pts { list-style: none; margin-top: 20px; }
+.pts li { font-size: 26px; line-height: 1.5; color: var(--text-secondary); padding: 9px 0 9px 28px; position: relative; }
+.pts li::before { content: ''; position: absolute; left: 0; top: 24px; width: 8px; height: 8px; border-radius: 50%; background: var(--text); }
+.pts li strong { color: var(--text); font-weight: 600; }
+.pts.sm li { font-size: 24px; }
+.pts.sm li::before { top: 22px; }
+
+/* 类比行：黑胶囊 + 一句短语（全 deck 共 11 处） */
+.ana { display: flex; align-items: flex-start; gap: 16px; font-size: 26px; line-height: 1.5; color: var(--text-secondary); }
+.ana.sm { font-size: 24px; }
+.card .ana { margin-top: 24px; }
+.card.v .ana { margin-top: auto; padding-top: 24px; }
+.cap { font-family: 'JetBrains Mono', 'Noto Sans SC', monospace; font-size: 15px; font-weight: 600; letter-spacing: 2px; color: #fff; background: var(--text); padding: 7px 16px; border-radius: 100px; flex-shrink: 0; white-space: nowrap; margin-top: 3px; }
+.cap.o { background: transparent; color: var(--text); border: 1.5px solid var(--text); margin-top: 0; }
+
+.flow { display: grid; grid-template-columns: 1fr auto 1fr; gap: 24px; align-items: stretch; width: 100%; }
+.arr { font-family: 'JetBrains Mono', monospace; font-size: 40px; color: var(--text-meta); align-self: center; }
+
+.kv { display: grid; grid-template-columns: 96px 1fr; gap: 20px 20px; margin-top: 26px; }
+.kv dt { font-size: 20px; font-weight: 600; color: var(--text-meta); padding-top: 9px; }
+.kv dd { font-size: 28px; line-height: 1.5; color: var(--text-secondary); }
+.kv dd strong { color: var(--text); font-weight: 600; }
+
+.minis { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+.mini { font-size: 22px; font-weight: 500; padding: 9px 20px; border-radius: 100px; border: 1.5px solid var(--border); color: var(--text); background: var(--bg); white-space: nowrap; }
+.minis.lg .mini { font-size: 28px; padding: 14px 28px; }
+
+.note { font-size: 22px; line-height: 1.5; color: var(--text-secondary); }
+.bar { background: var(--bg-soft); border-radius: 20px; padding: 28px 44px; font-size: 30px; line-height: 1.5; color: var(--text-secondary); }
+.bar strong { color: var(--text); font-weight: 700; }
+
+.stat-n { font-size: 132px; font-weight: 700; line-height: 1; letter-spacing: -0.04em; color: var(--text); }
+.stat-n .u { font-size: 52px; margin-left: 8px; color: var(--text-secondary); letter-spacing: 0; }
+.stat-l { font-size: 26px; line-height: 1.5; color: var(--text-secondary); margin-top: 18px; }
+
+.four-col { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; width: 100%; align-items: stretch; }
+.card.c4 { padding: 36px 32px; }
+.pc dt { font-family: 'JetBrains Mono', 'Noto Sans SC', monospace; font-size: 15px; font-weight: 600; letter-spacing: 2px; color: var(--text-meta); margin-top: 24px; }
+.pc dd { font-size: 24px; line-height: 1.5; color: var(--text-secondary); margin-top: 6px; }
+.pc dd strong { color: var(--text); font-weight: 600; }
+
+.verdict { display: inline-block; margin-top: 30px; font-size: 26px; font-weight: 600; padding: 12px 26px; border-radius: 100px; border: 1.5px solid var(--border); color: var(--text-secondary); }
+.verdict.on { background: var(--text); border-color: var(--text); color: #fff; }
+
+.eq { display: flex; align-items: center; gap: 28px; width: 100%; }
+.eq-l { font-size: 72px; font-weight: 700; letter-spacing: -0.02em; }
+.op { font-family: 'JetBrains Mono', monospace; font-size: 48px; color: var(--text-meta); }
+.eqc { flex: 1; text-align: center; font-size: 48px; font-weight: 700; padding: 56px 20px; }
+
+.yn { display: flex; justify-content: space-between; align-items: center; gap: 20px; font-size: 28px; font-weight: 500; color: var(--text); padding: 18px 0; border-bottom: 1px solid var(--border); }
+.yn:last-child { border-bottom: none; padding-bottom: 0; }
+
+.delta { margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--border); font-size: 26px; color: var(--text-secondary); }
+.delta strong { font-size: 56px; font-weight: 700; color: var(--text); margin: 0 8px; letter-spacing: -0.02em; }
+
+.duo { display: flex; gap: 56px; margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--border); }
+.duo .n { font-size: 56px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1; color: var(--text); }
+.duo .l { font-size: 22px; color: var(--text-secondary); margin-top: 6px; }
+
+.eqs { font-size: 34px; line-height: 1.6; font-weight: 600; color: var(--text); margin-top: 22px; }
+.eqs span { color: var(--text-meta); font-family: 'JetBrains Mono', monospace; margin-right: 14px; }
+
+/* Trace 示意：白底页面上唯一的深色块 */
+.trace { background: #1f1f1f; border-radius: 16px; padding: 36px 36px 32px; font-family: 'JetBrains Mono', 'Noto Sans SC', monospace; color: #e8e8e8; }
+.trace .hd { font-size: 13px; font-weight: 600; letter-spacing: 3px; color: #777; margin: 0 14px 20px; }
+.trace .r { display: grid; grid-template-columns: 40px 118px 1fr; gap: 0 14px; font-size: 22px; line-height: 1.5; padding: 13px 14px; border-radius: 8px; }
+.trace .r .n { color: #555; }
+.trace .r .k { color: #999; }
+.trace .r.bad { background: rgba(0,231,94,0.10); }
+.trace .r.bad em { font-style: normal; color: var(--accent); margin-left: 14px; white-space: nowrap; }
+
+.sum { display: grid; grid-template-columns: 220px 1fr; align-items: center; gap: 0 20px; }
+.sum .k { font-family: 'JetBrains Mono', monospace; font-size: 44px; font-weight: 600; letter-spacing: 2px; color: var(--text); }
+.sum .v { font-size: 32px; line-height: 1.5; color: var(--text-secondary); }
+.sum .v strong { color: var(--text); font-weight: 600; }
+
+/* 稀疏页放大：卡片优先放大（DESIGN 对齐纪律 3） */
+.w.big .card.c { padding: 56px 60px; }
+.w.big .card-label { font-size: 18px; margin-bottom: 26px; }
+.w.big .card .t { font-size: 64px; }
+.w.big .card .t.s { font-size: 50px; }
+.w.big .card .t.xl { font-size: 96px; }
+.w.big .card .d { font-size: 32px; margin-top: 22px; }
+.w.big .pts { margin-top: 28px; }
+.w.big .pts li { font-size: 32px; padding: 12px 0 12px 34px; }
+.w.big .pts li::before { top: 31px; width: 10px; height: 10px; }
+.w.big .minis { margin-top: 28px; gap: 14px; }
+.w.big .mini { font-size: 28px; padding: 14px 28px; }
+.w.big .step-card { padding: 64px 52px; }
+.w.big .step-card .step-num { font-size: 18px; }
+.w.big .step-card .step-title { font-size: 68px; margin: 24px 0 26px; }
+.w.big .step-card .step-desc { font-size: 32px; }
+.w.big .eqs { font-size: 38px; margin-top: 30px; }
+
+/* 术语标签：中英混排时文字在胶囊内垂直居中 */
+.tag-row .tag { display: inline-flex; align-items: center; line-height: 1.4; }
+
+.trace { display: flex; flex-direction: column; justify-content: center; }
+
+/* 演讲者注释：只在独立的注释窗口里显示，课件页面上永远不出现 */
+.slide aside.notes { display: none !important; }
+
+/* 巡检流程图（据美团原文重绘）：白底黑线，三个岔口的去向用黑底块标出 */
+.fc { width: 100%; height: auto; display: block; }
+.fc text { font-family: inherit; font-size: 22px; font-weight: 500; fill: var(--text); text-anchor: middle; dominant-baseline: central; }
+.fc .ln path { fill: none; stroke: #111; stroke-width: 1.5; }
+.fc .ln path.dash { stroke-dasharray: 6 6; }
+.fc .n rect, .fc .n polygon { fill: #fff; stroke: #111; stroke-width: 1.5; }
+.fc .k rect { fill: var(--text); }
+.fc .k text { fill: #fff; font-weight: 600; }
+.fc .lb text { fill: var(--text-secondary); }
+.fc .lb text.s { text-anchor: start; }
+.kv.n { grid-template-columns: 56px 1fr; gap: 16px 18px; }
+
+/* 41 个 Task 页：六类场景清单（类别 · 数量 · 考什么，数据来自美团原图） */
+.two-col.cat-cols { grid-template-columns: 560px 1fr; }
+.cat { display: grid; grid-template-columns: 200px 64px 1fr; gap: 0 24px; align-items: baseline; padding: 17px 0; border-bottom: 1px solid var(--border); }
+.cat:last-child { border-bottom: none; padding-bottom: 0; }
+.cat .k { font-size: 32px; font-weight: 700; color: var(--text); }
+.cat .n { font-size: 32px; font-weight: 700; color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
+.cat .v { font-size: 24px; line-height: 1.5; color: var(--text-secondary); }
+</style>
+</head>
+<body>
+
+<div class="progress" id="progress"></div>
+
+<div class="stage" id="stage">
+
+<div class="frame right"></div>
+
+<!-- 左侧侧边栏：logo + 目录树（栏内无任何横向分割线，无底部计数） -->
+<aside class="sidebar">
+  <div class="brand"><svg width="996" height="240" viewBox="0 0 996 240" fill="none" xmlns="http://www.w3.org/2000/svg">
+<rect width="240" height="240" rx="53.6741" fill="url(#paint0_linear_2111_594)"/>
+<g filter="url(#filter0_d_2111_594)">
+<path d="M33.9443 121.086C33.9444 74.8756 69.7314 38.0762 116.52 38.0762C129.707 38.0762 146.945 41.5045 161.017 51.2321C163.188 52.7332 163.732 55.7104 162.231 57.8819C160.73 60.0534 157.752 60.5969 155.581 59.0958C143.517 50.7564 128.332 47.6358 116.52 47.6358C75.1183 47.6358 43.504 80.0473 43.504 121.086C43.504 160.085 75.5542 193.095 116.032 193.13C132.425 192.697 144.897 188.623 153.12 183.385C161.535 178.024 164.825 171.971 164.825 167.684C164.825 166.409 164.419 165.073 163.492 163.413C162.515 161.664 161.204 159.957 159.551 157.715C156.454 153.517 152.41 147.832 152.41 139.998C152.41 133.455 155.633 128.334 160.225 125.292C162.87 123.54 165.95 122.483 169.125 122.176C168.288 113.827 168.961 107.251 170.958 102.375C173.538 96.0751 178.441 92.546 184.33 92.546C188.791 92.5461 192.446 94.059 194.804 97.356C196.862 100.234 197.407 103.822 197.66 106.687C197.793 108.199 197.858 109.784 197.924 111.254C197.991 112.766 198.06 114.199 198.191 115.599C198.457 118.437 198.952 120.73 199.901 122.533C203.661 129.677 206.842 136.723 207.195 144.104C207.564 151.797 204.861 159.17 198.404 167.006C196.725 169.043 193.712 169.333 191.675 167.655C189.638 165.976 189.348 162.963 191.026 160.926C196.356 154.459 197.876 149.341 197.647 144.561C197.403 139.472 195.168 134.065 191.441 126.985C189.628 123.54 188.981 119.78 188.673 116.49C188.517 114.827 188.441 113.176 188.374 111.679C188.305 110.14 188.248 108.787 188.137 107.526C187.901 104.844 187.475 103.542 187.028 102.917C186.88 102.71 186.495 102.106 184.33 102.106C182.892 102.106 181.143 102.73 179.805 105.997C178.333 109.592 177.609 116.052 179.349 126.5C179.613 128.084 179.065 129.694 177.889 130.786C176.714 131.879 175.068 132.309 173.508 131.931C170.706 131.252 167.714 131.799 165.504 133.262C163.406 134.652 161.97 136.871 161.97 139.998C161.97 144.402 164.133 147.823 167.244 152.04C168.694 154.006 170.487 156.334 171.838 158.751C173.238 161.258 174.384 164.222 174.384 167.684C174.384 176.6 168.038 185.217 158.256 191.447C148.294 197.794 134.032 202.228 116.219 202.688C116.178 202.689 116.136 202.69 116.095 202.69C70.2735 202.69 33.9443 165.35 33.9443 121.086Z" fill="#EEEEEE"/>
+<path d="M181.655 51.092C182.419 48.7751 185.696 48.7751 186.46 51.092L187.729 54.9416C189.235 59.5129 192.821 63.0985 197.392 64.6051L201.242 65.8738C203.559 66.6374 203.559 69.9148 201.242 70.6784L197.392 71.9472C192.821 73.4537 189.235 77.0394 187.729 81.6107L186.46 85.4602C185.696 87.7771 182.419 87.7771 181.655 85.4602L180.387 81.6107C178.88 77.0394 175.294 73.4537 170.723 71.9472L166.874 70.6784C164.557 69.9148 164.557 66.6374 166.874 65.8738L170.723 64.6051C175.294 63.0985 178.88 59.5129 180.387 54.9416L181.655 51.092Z" fill="#00E75E"/>
+<ellipse cx="83.1687" cy="108.335" rx="10.7634" ry="17.3205" transform="rotate(2.46958 83.1687 108.335)" fill="#EEEEEE"/>
+<ellipse cx="125.316" cy="106.383" rx="11.5513" ry="18.5882" transform="rotate(2.46958 125.316 106.383)" fill="#EEEEEE"/>
+</g>
+<path d="M940.438 207.917C928.278 207.917 917.478 205.357 908.038 200.237C898.598 194.957 891.078 187.757 885.478 178.637C880.038 169.517 877.318 159.117 877.318 147.437C877.318 135.917 879.958 125.677 885.238 116.717C890.678 107.597 898.038 100.397 907.318 95.117C916.598 89.677 926.918 86.957 938.278 86.957C949.478 86.957 959.318 89.517 967.798 94.637C976.438 99.597 983.158 106.477 987.958 115.277C992.918 123.917 995.398 133.757 995.398 144.797C995.398 146.877 995.238 149.037 994.918 151.277C994.758 153.357 994.358 155.757 993.718 158.477L896.278 158.717V135.197L979.078 134.957L966.358 144.797C966.038 137.917 964.758 132.157 962.518 127.517C960.438 122.877 957.318 119.357 953.158 116.957C949.158 114.397 944.198 113.117 938.278 113.117C932.038 113.117 926.598 114.557 921.958 117.437C917.318 120.157 913.718 124.077 911.158 129.197C908.758 134.157 907.558 140.077 907.558 146.957C907.558 153.997 908.838 160.157 911.398 165.437C914.118 170.557 917.958 174.557 922.918 177.437C927.878 180.157 933.638 181.517 940.198 181.517C946.118 181.517 951.478 180.557 956.278 178.637C961.078 176.557 965.238 173.517 968.758 169.517L987.238 187.997C981.638 194.557 974.758 199.517 966.598 202.877C958.598 206.237 949.878 207.917 940.438 207.917Z" fill="#222222"/>
+<path d="M811.569 205.519V41.3594H843.009V205.519H811.569ZM784.449 117.199V89.5994H870.129V117.199H784.449Z" fill="#222222"/>
+<path d="M701.915 207.919C691.355 207.919 681.835 205.279 673.355 199.999C664.875 194.719 658.235 187.519 653.435 178.399C648.635 169.279 646.235 159.039 646.235 147.679C646.235 136.159 648.635 125.839 653.435 116.719C658.235 107.599 664.875 100.399 673.355 95.1192C681.835 89.8392 691.355 87.1992 701.915 87.1992C710.235 87.1992 717.675 88.8792 724.235 92.2392C730.795 95.5992 735.995 100.319 739.835 106.399C743.835 112.319 745.995 119.039 746.315 126.559V168.319C745.995 175.999 743.835 182.799 739.835 188.719C735.995 194.639 730.795 199.359 724.235 202.879C717.675 206.239 710.235 207.919 701.915 207.919ZM707.675 178.879C716.475 178.879 723.595 175.999 729.035 170.239C734.475 164.319 737.195 156.719 737.195 147.439C737.195 141.359 735.915 135.999 733.355 131.359C730.955 126.559 727.515 122.879 723.035 120.319C718.715 117.599 713.595 116.239 707.675 116.239C701.915 116.239 696.795 117.599 692.315 120.319C687.995 122.879 684.555 126.559 681.995 131.359C679.595 135.999 678.395 141.359 678.395 147.439C678.395 153.679 679.595 159.199 681.995 163.999C684.555 168.639 687.995 172.319 692.315 175.039C696.795 177.599 701.915 178.879 707.675 178.879ZM735.515 205.519V174.319L740.555 145.999L735.515 118.159V89.5992H766.715V205.519H735.515Z" fill="#222222"/>
+<path d="M596.67 205.519V139.039C596.67 132.159 594.51 126.559 590.19 122.239C585.87 117.919 580.27 115.759 573.39 115.759C568.91 115.759 564.91 116.719 561.39 118.639C557.87 120.559 555.07 123.279 552.99 126.799C551.07 130.319 550.11 134.399 550.11 139.039L537.87 132.799C537.87 123.679 539.79 115.759 543.63 109.039C547.63 102.159 553.07 96.7992 559.95 92.9592C566.99 89.1192 574.91 87.1992 583.71 87.1992C592.19 87.1992 599.79 89.3592 606.51 93.6792C613.23 97.8392 618.51 103.359 622.35 110.239C626.19 116.959 628.11 124.239 628.11 132.079V205.519H596.67ZM518.67 205.519V89.5992H550.11V205.519H518.67Z" fill="#222222"/>
+<path d="M461.904 205.519V139.039C461.904 132.159 459.744 126.559 455.424 122.239C451.104 117.919 445.504 115.759 438.624 115.759C434.144 115.759 430.144 116.719 426.624 118.639C423.104 120.559 420.304 123.279 418.224 126.799C416.304 130.319 415.344 134.399 415.344 139.039L403.104 132.799C403.104 123.679 405.024 115.759 408.864 109.039C412.864 102.159 418.304 96.7992 425.184 92.9592C432.224 89.1192 440.144 87.1992 448.944 87.1992C457.424 87.1992 465.024 89.3592 471.744 93.6792C478.464 97.8392 483.744 103.359 487.584 110.239C491.424 116.959 493.344 124.239 493.344 132.079V205.519H461.904ZM383.904 205.519V89.5992H415.344V205.519H383.904Z" fill="#222222"/>
+<path d="M320 205.517V36.7969H352.64V205.517H320Z" fill="#222222"/>
+<defs>
+<filter id="filter0_d_2111_594" x="24.7136" y="38.0762" width="191.746" height="183.077" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+<feFlood flood-opacity="0" result="BackgroundImageFix"/>
+<feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"/>
+<feOffset dy="9.23077"/>
+<feGaussianBlur stdDeviation="4.61538"/>
+<feComposite in2="hardAlpha" operator="out"/>
+<feColorMatrix type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.2 0"/>
+<feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_2111_594"/>
+<feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_2111_594" result="shape"/>
+</filter>
+<linearGradient id="paint0_linear_2111_594" x1="120" y1="0" x2="120" y2="240" gradientUnits="userSpaceOnUse">
+<stop stop-color="#333333"/>
+<stop offset="1" stop-color="#181818"/>
+</linearGradient>
+</defs>
+</svg></div>
+  <nav class="toc">
+    <a class="toc-item" data-idx="0">封面</a>
+    <a class="toc-item" data-idx="1">课程脉络</a>
+    <a class="toc-item ch" data-idx="2">01 · What 是什么</a>
+    <a class="toc-item sub" data-idx="3">Agent 是什么</a>
+    <a class="toc-item sub" data-idx="4">评测是什么</a>
+    <a class="toc-item sub" data-idx="5">评测度量什么</a>
+    <a class="toc-item sub" data-idx="6">案例：查错日期</a>
+    <a class="toc-item sub" data-idx="7">评测自身的要求</a>
+    <a class="toc-item ch" data-idx="8">02 · Why 为什么重要</a>
+    <a class="toc-item sub" data-idx="9">三种结局</a>
+    <a class="toc-item sub" data-idx="10">为什么更需要评测</a>
+    <a class="toc-item sub" data-idx="11">产品经理的三个决策</a>
+    <a class="toc-item ch" data-idx="12">03 · How 怎么做</a>
+    <a class="toc-item sub" data-idx="13">五步总览</a>
+    <a class="toc-item sub" data-idx="14">① 评测集与 Task</a>
+    <a class="toc-item sub" data-idx="15">任务从哪来</a>
+    <a class="toc-item sub" data-idx="16">案例：巡检流程图</a>
+    <a class="toc-item sub" data-idx="17">41 个 Task</a>
+    <a class="toc-item sub" data-idx="18">黄金集与错题集</a>
+    <a class="toc-item sub" data-idx="19">② 评分标准 Rubric</a>
+    <a class="toc-item sub" data-idx="20">标准分层</a>
+    <a class="toc-item sub" data-idx="21">成功三问</a>
+    <a class="toc-item sub" data-idx="22">③ 判定：谁来判</a>
+    <a class="toc-item sub" data-idx="23">判定：判几次</a>
+    <a class="toc-item sub" data-idx="24">④ 离线与在线</a>
+    <a class="toc-item sub" data-idx="25">巡检与 AB 实验</a>
+    <a class="toc-item sub" data-idx="26">⑤ 观测：Trace</a>
+    <a class="toc-item sub" data-idx="27">Case 挖掘</a>
+    <a class="toc-item sub" data-idx="28">归因</a>
+    <a class="toc-item sub" data-idx="29">两条迭代闭环</a>
+    <a class="toc-item sub" data-idx="30">两个关键认识</a>
+    <a class="toc-item sub" data-idx="31">评测工具</a>
+    <a class="toc-item sub" data-idx="32">从哪里起步</a>
+    <a class="toc-item sub" data-idx="33">美团的结果</a>
+    <a class="toc-item" data-idx="34">总结</a>
+    <a class="toc-item" data-idx="35">术语速查</a>
+    <a class="toc-item" data-idx="36">思考题</a>
+  </nav>
+</aside>
+
+<div class="corner-meta">x:<span id="mx">0960</span> y:<span id="my">0540</span> · fps:<span id="fps">60</span> · θ:<span id="theta">0.0</span>°</div>
+
+<!-- P01 封面 -->
+<section class="slide active">
+  <div class="eyebrow">AI 产品经理课 · Agent Evaluation</div>
+  <h1 class="display h-xxl">Agent 评测</h1>
+  <p class="body-xl mt-l">是什么 · 为什么重要 · 怎么做</p>
+  <p style="position:absolute;bottom:110px;left:384px;font-size:22px;letter-spacing:2px;color:var(--text-secondary);font-weight:500">素材来源 · 美团技术团队《Agent 评测白皮书》01 · 02</p>
+</section>
+
+<!-- P02 课程脉络 -->
+<section class="slide">
+  <div class="slide-header"><span>Outline</span><span>课程脉络</span></div>
+  <div class="eyebrow">Outline</div>
+  <h2 class="display h-m">一节课，三个问题</h2>
+  <div class="mt-l" style="max-width:1380px">
+    <div class="agenda-row">
+      <span class="time">What</span>
+      <span class="name">评测是什么</span>
+      <span class="note">Agent · 评测 · 度量什么 · 对量具的要求</span>
+    </div>
+    <div class="agenda-row">
+      <span class="time">Why</span>
+      <span class="name">为什么重要</span>
+      <span class="note">三种结局 · 两个原因 · 三个决策</span>
+    </div>
+    <div class="agenda-row">
+      <span class="time">How</span>
+      <span class="name">怎么做</span>
+      <span class="note">评测集 · 评分标准 · 判定 · 离线与在线 · 观测与归因</span>
+    </div>
+  </div>
+</section>
+
+<!-- P03 章节：What -->
+<section class="slide">
+  <div class="slide-header"><span>Part 01</span><span>What</span></div>
+  <div class="chapter-watermark">01</div>
+  <div class="chapter">
+    <span class="num">Part 01 · What</span>
+    <h2 class="title">评测是什么</h2>
+    <div class="sub">Agent · 评测 · 度量什么 · 对量具的要求</div>
+  </div>
+</section>
+
+<!-- P04 Agent 是什么 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>What · Agent</span></div>
+  <div class="top-title">Agent 是什么</div>
+  <div class="w">
+    <div class="card c">
+      <div class="card-label">Definition · 定义</div>
+      <div class="def"><strong>Agent（智能体）</strong>：能<strong>理解目标</strong>、<strong>自己规划步骤</strong>、<strong>调用工具</strong>并把任务完成的 AI 系统</div>
+    </div>
+    <div class="two-col">
+      <div class="card c">
+        <div class="card-label">聊天机器人</div>
+        <div class="t">生成回答</div>
+        <div class="d">“订周五晚上四个人的川菜馆”</div>
+        <div class="minis"><span class="mini">给你推荐几家</span></div>
+      </div>
+      <div class="card c">
+        <div class="card-label">Agent</div>
+        <div class="t"><span class="hl">执行任务</span></div>
+        <div class="d">“订周五晚上四个人的川菜馆”</div>
+        <div class="minis"><span class="mini">查餐厅</span><span class="mini">比价格</span><span class="mini">下订单</span><span class="mini">告诉你订好了</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- P05 评测是什么 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>What · Evaluation</span></div>
+  <div class="top-title">评测是什么</div>
+  <div class="w">
+    <div class="card c">
+      <div class="card-label">Definition · 定义</div>
+      <div class="def"><strong>评测（Evaluation，简称 Eval）</strong>：对 Agent 的效果做<strong>系统性度量</strong>的一套方法</div>
+    </div>
+    <div class="two-col">
+      <div class="card c">
+        <div class="card-label">它回答的问题一</div>
+        <div class="t">好不好</div>
+        <div class="d">给判断</div>
+      </div>
+      <div class="card c">
+        <div class="card-label">它回答的问题二</div>
+        <div class="t">哪里好、哪里不好</div>
+        <div class="d">指方向</div>
+      </div>
+    </div>
+    <div class="ana"><span class="cap">类比</span>战队新招的选手：先试训 → 打训练赛 → 每场看录像复盘</div>
+  </div>
+</section>
+
+<!-- P06 评测度量的是什么 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>What · 度量对象</span></div>
+  <div class="top-title">从“答案评测”走向“行为评测”</div>
+  <div class="w">
+    <div class="flow">
+      <div class="card c">
+        <div class="card-label">过去 · 模型评测</div>
+        <div class="t">答案评测</div>
+        <ul class="pts">
+          <li>评<strong>答案</strong>对不对</li>
+          <li>有标准答案可以比对</li>
+          <li>例：某公司的创始人是谁</li>
+        </ul>
+      </div>
+      <div class="arr">→</div>
+      <div class="card c">
+        <div class="card-label">现在 · Agent 评测</div>
+        <div class="t">行为评测</div>
+        <ul class="pts">
+          <li>评<strong>任务完成得</strong>对不对</li>
+          <li>没有唯一答案</li>
+          <li>例：做一份经营分析报告</li>
+        </ul>
+      </div>
+    </div>
+    <div class="flow">
+      <div class="card soft c">
+        <div class="card-label">层面一 · 看最终结果</div>
+        <div class="t s">端到端评测</div>
+        <div class="d">事有没有办成</div>
+      </div>
+      <div class="arr" style="visibility:hidden">→</div>
+      <div class="card soft c">
+        <div class="card-label">层面二 · 看中间步骤</div>
+        <div class="t s">过程评测</div>
+        <div class="d">哪一步出了问题</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- P07 案例：查错日期 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>What · Case</span></div>
+  <div class="top-title">案例：一份“合格”的错误报告</div>
+  <div class="w">
+    <div class="card c">
+      <div class="card-label">Task · 商家的要求</div>
+      <div class="def"><strong>检查昨天的广告投放</strong></div>
+    </div>
+    <div class="two-col">
+      <div class="card c">
+        <div class="card-label">只看结果 · 端到端评测</div>
+        <div class="t s">一份结构完整的报告</div>
+        <div class="minis"><span class="mini">格式 ✓</span><span class="mini">图表 ✓</span><span class="mini">结论 ✓</span></div>
+        <div class="verdict">判定：合格</div>
+      </div>
+      <div class="card c">
+        <div class="card-label">看过程 · 过程评测</div>
+        <div class="t s">实际查的是<span class="hl">今天</span>的数据</div>
+        <div class="minis"><span class="mini">查询日期 ✗</span></div>
+        <div class="verdict on">判定：错误</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- P08 评测自身的两个要求 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>What · 量具</span></div>
+  <div class="top-title">评测是一套“精密量具”</div>
+  <div class="w">
+    <div class="two-col">
+      <div class="card c">
+        <div class="card-label">要求一</div>
+        <div class="t">要准</div>
+        <ul class="pts">
+          <li><strong>人人一致</strong>：不同的人打分一致</li>
+          <li><strong>人机一致</strong>：人和机器打分一致</li>
+        </ul>
+        <div class="ana"><span class="cap">类比</span>同一条视频，两个审核员，一个过、一个不过</div>
+      </div>
+      <div class="card c">
+        <div class="card-label">要求二 · 最容易被忽略</div>
+        <div class="t">要定期校准</div>
+        <ul class="pts">
+          <li>用户变了</li>
+          <li>功能变了</li>
+          <li>业务目标变了</li>
+        </ul>
+        <div class="d">→ 原有的题目和标准逐渐<strong>失去代表性</strong></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- P09 章节：Why -->
+<section class="slide">
+  <div class="slide-header"><span>Part 02</span><span>Why</span></div>
+  <div class="chapter-watermark">02</div>
+  <div class="chapter">
+    <span class="num">Part 02 · Why</span>
+    <h2 class="title">为什么重要</h2>
+    <div class="sub">三种结局 · 两个原因 · 三个决策</div>
+  </div>
+</section>
+
+<!-- P10 没有评测的三种结局 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>Why · 三种结局</span></div>
+  <div class="top-title">没有评测的三种结局</div>
+  <div class="w">
+    <div class="three-col">
+      <div class="step-card">
+        <div class="step-num">01</div>
+        <div class="step-title" style="font-size:50px">停在演示</div>
+        <div class="step-desc">演示很好，一接<strong>真实流量</strong>就覆盖不住</div>
+      </div>
+      <div class="step-card">
+        <div class="step-num">02</div>
+        <div class="step-title" style="font-size:50px">卡在放量</div>
+        <div class="step-desc">小范围还行，一放量问题集中暴露，<strong>说不清错在哪一层</strong></div>
+      </div>
+      <div class="step-card">
+        <div class="step-num">03</div>
+        <div class="step-title" style="font-size:50px">说不清业务价值</div>
+        <div class="step-desc">迭代了几十版，<strong>拿不出变好的证据</strong></div>
+      </div>
+    </div>
+    <div class="bar">共同原因：缺少<strong>可靠的判断机制</strong>，决策靠感觉和个别案例</div>
+  </div>
+</section>
+
+<!-- P11 Agent 比传统软件更需要评测 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>Why · 两个原因</span></div>
+  <div class="top-title">Agent 比传统软件更需要评测</div>
+  <div class="w">
+    <div class="two-col">
+      <div class="card c">
+        <div class="card-label">Before</div>
+        <div class="t">传统软件</div>
+        <dl class="kv">
+          <dt>输出</dt><dd>相同输入 → 相同输出</dd>
+          <dt>出错时</dt><dd>崩溃、弹出提示</dd>
+        </dl>
+      </div>
+      <div class="card c">
+        <div class="card-label">Now</div>
+        <div class="t">Agent</div>
+        <dl class="kv">
+          <dt>输出</dt><dd><strong>有随机性</strong>：同一任务执行多次，结果可能不同</dd>
+          <dt>出错时</dt><dd><strong>不会报错</strong>：照样交出看起来完整可信的结果</dd>
+        </dl>
+      </div>
+    </div>
+    <div class="card c">
+      <div class="card-label">Term · 术语</div>
+      <div class="def"><strong>幻觉（Hallucination）</strong>：模型自信地给出错误内容</div>
+    </div>
+  </div>
+</section>
+
+<!-- P12 对产品经理意味着什么 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>Why · 产品经理</span></div>
+  <div class="top-title">评测支撑产品经理的三个关键决策</div>
+  <div class="w big">
+    <div class="three-col">
+      <div class="step-card">
+        <div class="step-num">Decision 01</div>
+        <div class="step-title">能不能上线</div>
+        <div class="step-desc">这个版本能不能上线</div>
+      </div>
+      <div class="step-card">
+        <div class="step-num">Decision 02</div>
+        <div class="step-title">该由谁解决</div>
+        <div class="step-desc">出了问题该由谁来解决</div>
+      </div>
+      <div class="step-card">
+        <div class="step-num">Decision 03</div>
+        <div class="step-title">值不值得投</div>
+        <div class="step-desc">这个项目值不值得继续投入</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- P13 章节：How -->
+<section class="slide">
+  <div class="slide-header"><span>Part 03</span><span>How</span></div>
+  <div class="chapter-watermark">03</div>
+  <div class="chapter">
+    <span class="num">Part 03 · How</span>
+    <h2 class="title">怎么做</h2>
+    <div class="sub">一个真实案例，五个步骤</div>
+  </div>
+</section>
+
+<!-- P14 五步总览（L19 分步管线） -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>How · 总览</span></div>
+  <div class="top-title">五个步骤</div>
+  <div class="anim-pipe" style="text-align:left" data-narration='["案例：美团商家广告助手 ·「每日巡检」——每天检查连锁大客户的广告投放有没有异常，并出一份报告。","<strong>构建评测集</strong>：准备一批固定的测试任务（Task）。","<strong>定义评分标准</strong>：把“好不好”拆成只能回答是或否的 Rubric。","<strong>判定</strong>：由谁来判（Grader），判几次（Pass@k / Pass^k）。","<strong>离线评测与在线评测</strong>：上线前回测把关，上线后巡检和 AB 实验。","<strong>观测、Case 挖掘与归因</strong>：留下 Trace，找出 Bad Case，判断问题出在哪个环节。"]'>
+    <div class="pipe-row">
+      <div class="pipe-stage" data-s="0"><span class="pst-num">01</span><span class="pst-name">评测集</span></div>
+      <div class="pipe-arr">→</div>
+      <div class="pipe-stage" data-s="1"><span class="pst-num">02</span><span class="pst-name">评分标准</span></div>
+      <div class="pipe-arr">→</div>
+      <div class="pipe-stage" data-s="2"><span class="pst-num">03</span><span class="pst-name">判定</span></div>
+      <div class="pipe-arr">→</div>
+      <div class="pipe-stage" data-s="3"><span class="pst-num">04</span><span class="pst-name">离线 · 在线</span></div>
+      <div class="pipe-arr">→</div>
+      <div class="pipe-stage" data-s="4"><span class="pst-num">05</span><span class="pst-name">观测归因</span></div>
+    </div>
+    <div class="pipe-narration">
+      <div class="pn-label">CURRENT STAGE</div>
+      <div class="pn-body">案例：美团商家广告助手 ·「每日巡检」——每天检查连锁大客户的广告投放有没有异常，并出一份报告。</div>
+    </div>
+    <div class="anim-controls">
+      <button class="anim-btn primary" data-act="next">下一步 →</button>
+      <button class="anim-btn" data-act="reset">↻ 重置</button>
+      <span class="anim-step"><span data-out="cur">0</span> / 5</span>
+    </div>
+  </div>
+</section>
+
+<!-- P15 第一步：评测集与 Task -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>How · Step 1</span></div>
+  <div class="top-title">第一步 · 构建评测集</div>
+  <div class="w">
+    <div class="card c">
+      <div class="card-label">Definition · 定义</div>
+      <div class="def"><strong>评测集</strong>：一批固定的测试任务，每个任务称为一个 <strong>Task</strong></div>
+    </div>
+    <div class="eq">
+      <div class="eq-l">Task</div>
+      <div class="op">=</div>
+      <div class="card eqc">任务输入</div>
+      <div class="op">+</div>
+      <div class="card eqc">预期行为</div>
+      <div class="op">+</div>
+      <div class="card eqc">评价标准</div>
+    </div>
+    <div class="note">出处 · Anthropic 的评测文章：Task 是“具有明确输入和成功标准的单个测试”，美团沿用</div>
+  </div>
+</section>
+
+<!-- P16 任务从哪来 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>How · Step 1</span></div>
+  <div class="top-title">Task 从哪来：两条路径</div>
+  <div class="w big">
+    <div class="two-col">
+      <div class="card c">
+        <div class="card-label">路径一 · 从业务流程拆解</div>
+        <div class="t">自顶向下</div>
+        <ul class="pts">
+          <li>该做什么</li>
+          <li>什么时候停止</li>
+          <li>什么时候转交</li>
+        </ul>
+      </div>
+      <div class="card c">
+        <div class="card-label">路径二 · 从真实错误补充</div>
+        <div class="t">自底向上</div>
+        <ul class="pts">
+          <li>具体错误 → 抽象成一类<strong>失效模式</strong></li>
+          <li>例：“查错日期” → <strong>日期理解失效</strong></li>
+        </ul>
+        <div class="minis"><span class="mini">今天</span><span class="mini">昨天</span><span class="mini">历史日期</span><span class="mini">周末</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+<section class="slide center">
+  <div class="slide-header"><span></span><span>How · Step 1</span></div>
+  <div class="top-title">案例：巡检流程里的停止与转交</div>
+  <div class="w">
+    <svg class="fc" viewBox="-2 0 1574 306" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="KA 每日巡检业务流程图">
+      <defs>
+        <marker id="fcArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#111"/></marker>
+      </defs>
+      <g class="ln">
+        <path d="M160,80 H204" marker-end="url(#fcArrow)"/>
+        <path d="M340,80 H384" marker-end="url(#fcArrow)"/>
+        <path d="M520,80 H564" marker-end="url(#fcArrow)"/>
+        <path d="M774,80 H818" marker-end="url(#fcArrow)"/>
+        <path d="M954,80 H998" marker-end="url(#fcArrow)"/>
+        <path d="M1208,80 H1252" marker-end="url(#fcArrow)"/>
+        <path d="M1388,80 H1432" marker-end="url(#fcArrow)"/>
+        <path class="dash" d="M80,122 V200" marker-end="url(#fcArrow)"/>
+        <path d="M669,145 V200" marker-end="url(#fcArrow)"/>
+        <path d="M1103,145 V200" marker-end="url(#fcArrow)"/>
+        <path d="M669,264 V300 H1500 V122" marker-end="url(#fcArrow)"/>
+        <path d="M1103,264 V300"/>
+      </g>
+      <g class="n">
+        <rect x="0" y="38" width="160" height="84" rx="12"/>
+        <text x="80" y="65">意图识别</text><text x="80" y="95">与前置检查</text>
+        <rect x="204" y="38" width="136" height="84" rx="12"/>
+        <text x="272" y="65">基础数据</text><text x="272" y="95">获取</text>
+        <rect x="384" y="38" width="136" height="84" rx="12"/>
+        <text x="452" y="80">门店筛查</text>
+        <polygon points="564,80 669,15 774,80 669,145"/>
+        <text x="669" y="66">存在异常</text><text x="669" y="94">门店？</text>
+        <rect x="818" y="38" width="136" height="84" rx="12"/>
+        <text x="886" y="65">异常投放</text><text x="886" y="95">下钻</text>
+        <polygon points="998,80 1103,15 1208,80 1103,145"/>
+        <text x="1103" y="66">命中直接</text><text x="1103" y="94">根因？</text>
+        <rect x="1252" y="38" width="136" height="84" rx="12"/>
+        <text x="1320" y="80">分层归因</text>
+        <rect x="1432" y="38" width="136" height="84" rx="12"/>
+        <text x="1500" y="80">汇总报告</text>
+      </g>
+      <g class="k">
+        <rect x="0" y="200" width="250" height="64" rx="12"/>
+        <text x="125" y="232">① 转交相应 Skill</text>
+        <rect x="589" y="200" width="160" height="64" rx="12"/>
+        <text x="669" y="232">② 跳过下钻</text>
+        <rect x="991" y="200" width="224" height="64" rx="12"/>
+        <text x="1103" y="232">③ 停止弱证据检查</text>
+      </g>
+      <g class="lb">
+        <text x="796" y="56">是</text>
+        <text x="1230" y="56">否</text>
+        <text class="s" x="96" y="162">非巡检请求</text>
+        <text class="s" x="685" y="172">否</text>
+        <text class="s" x="1119" y="172">是</text>
+      </g>
+    </svg>
+    <div class="three-col">
+      <div class="card c">
+        <div class="card-label">① 转交点</div>
+        <div class="t">转交</div>
+        <dl class="kv n">
+          <dt>情况</dt><dd>用户要的是日报复盘、计划诊断或计划编辑</dd>
+          <dt>做法</dt><dd><strong>转交相应 Skill</strong><br>结束当前巡检</dd>
+        </dl>
+      </div>
+      <div class="card c">
+        <div class="card-label">② 条件分支</div>
+        <div class="t">跳过</div>
+        <dl class="kv n">
+          <dt>情况</dt><dd>没有发现异常门店</dd>
+          <dt>做法</dt><dd><strong>跳过下钻</strong><br>仍要生成巡检报告</dd>
+        </dl>
+      </div>
+      <div class="card c">
+        <div class="card-label">③ 提前停止点</div>
+        <div class="t">停止</div>
+        <dl class="kv n">
+          <dt>情况</dt><dd>命中预算、余额、状态、时段等直接根因</dd>
+          <dt>做法</dt><dd><strong>停止后续弱证据检查</strong><br>直接出报告</dd>
+        </dl>
+      </div>
+    </div>
+    <div class="note">流程图 · 据美团原文“KA 每日巡检业务流程图”重绘</div>
+  </div>
+</section>
+
+<!-- P17 41 个 Task -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>How · Step 1</span></div>
+  <div class="top-title">每日巡检的评测集</div>
+  <div class="w">
+    <div class="two-col cat-cols">
+      <div class="card c mid">
+        <div class="card-label">美团 · 每日巡检</div>
+        <div class="stat-n" style="font-size:220px">41</div>
+        <div class="stat-l" style="font-size:40px;font-weight:600;color:var(--text)">个 Task · 六类</div>
+      </div>
+      <div class="card c mid">
+        <div class="card-label">六类场景 · 数量</div>
+        <div class="cat"><span class="k">核心流程</span><span class="n">15</span><span class="v">必要步骤、异常下钻、分层归因与报告交付</span></div>
+        <div class="cat"><span class="k">触发词变体</span><span class="n">10</span><span class="v">口语、极简及带重点的巡检请求</span></div>
+        <div class="cat"><span class="k">压力测试</span><span class="n">6</span><span class="v">越界诱导、相似参数与错误命令防护</span></div>
+        <div class="cat"><span class="k">日期边界</span><span class="n">4</span><span class="v">历史日期、相对日期与周末</span></div>
+        <div class="cat"><span class="k">路由转交</span><span class="n">4</span><span class="v">转向诊断或报表 Skill</span></div>
+        <div class="cat"><span class="k">KPI 适配</span><span class="n">2</span><span class="v">不同核心 KPI 下的判断差异</span></div>
+      </div>
+    </div>
+    <div class="bar"><strong>路由转交</strong>　考“什么时候<span class="hl">不该做</span>”：该追问、该转交、该拒绝　·　和主流程同等重要</div>
+  </div>
+</section>
+
+<!-- P18 黄金集与错题集 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>How · Step 1</span></div>
+  <div class="top-title">评测集里的两类核心资产</div>
+  <div class="w big">
+    <div class="two-col">
+      <div class="card c">
+        <div class="card-label">正确的样本</div>
+        <div class="t xl">黄金集</div>
+        <div class="d" style="font-size:38px">定义“好的下限”</div>
+      </div>
+      <div class="card c">
+        <div class="card-label">出过错的样本</div>
+        <div class="t xl">错题集</div>
+        <div class="d" style="font-size:38px">每个犯过的错，不再犯第二次</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- P19 第二步：Rubric 二元化 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>How · Step 2</span></div>
+  <div class="top-title">第二步 · 定义评分标准</div>
+  <div class="w">
+    <div class="card c">
+      <div class="card-label">Definition · 定义</div>
+      <div class="def"><strong>Rubric（评分细则）</strong>：最小粒度的评价标准，每一条只能回答<strong>是或否</strong></div>
+    </div>
+    <div class="flow" style="grid-template-columns:0.8fr auto 1.2fr">
+      <div class="card c mid">
+        <div class="card-label">无法打分</div>
+        <div class="t s">“这份 PPT 做得好不好？”</div>
+      </div>
+      <div class="arr">→</div>
+      <div class="card c">
+        <div class="card-label">二元化 · 拆成是或否</div>
+        <div class="yn"><span>是否产出了文件</span><span class="cap o">是 / 否</span></div>
+        <div class="yn"><span>投放金额是否与源数据一致</span><span class="cap o">是 / 否</span></div>
+        <div class="yn"><span>是否包含同比或环比分析</span><span class="cap o">是 / 否</span></div>
+      </div>
+    </div>
+    <div class="bar">目的：消除分歧，提高<strong>人人一致率</strong>和<strong>人机一致率</strong></div>
+  </div>
+</section>
+
+<!-- P20 标准分层 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>How · Step 2</span></div>
+  <div class="top-title">评分标准要分层</div>
+  <div class="w big">
+    <div class="two-col">
+      <div class="card c">
+        <div class="card-label">第一层 · 决定任务是否成功</div>
+        <div class="t">成功必需项</div>
+        <ul class="pts">
+          <li><strong>全部通过</strong>，任务才算成功</li>
+          <li><strong>一票否决</strong>：安全类、数据准确性类</li>
+          <li>例：未经确认的写操作、数据外发</li>
+        </ul>
+      </div>
+      <div class="card c">
+        <div class="card-label">第二层 · 不影响任务是否成功</div>
+        <div class="t">质量诊断项</div>
+        <ul class="pts">
+          <li>用于发现<strong>优化空间</strong></li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- P21 成功三问 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>How · Step 2</span></div>
+  <div class="top-title">美团把巡检的“成功”拆成三个问题</div>
+  <div class="w big">
+    <div class="three-col">
+      <div class="step-card">
+        <div class="step-num">Question 01</div>
+        <div class="step-title">流程</div>
+        <div class="step-desc">执行流程是否<strong>遵循业务规范</strong></div>
+      </div>
+      <div class="step-card">
+        <div class="step-num">Question 02</div>
+        <div class="step-title">依据</div>
+        <div class="step-desc">过程和结论是否<strong>有据可依</strong></div>
+      </div>
+      <div class="step-card">
+        <div class="step-num">Question 03</div>
+        <div class="step-title">交付</div>
+        <div class="step-desc">报告是否<strong>可交付</strong></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- P22 第三步：谁来判 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>How · Step 3</span></div>
+  <div class="top-title">第三步 · 判定：谁来判</div>
+  <div class="w">
+    <div class="def" style="font-size:32px"><strong>Grader</strong>：执行判定的程序，分两种</div>
+    <div class="two-col">
+      <div class="card c">
+        <div class="card-label">用规则和代码判定</div>
+        <div class="t">确定性 Grader</div>
+        <div class="d">适合：能从执行记录里<strong>精确取证</strong>的检查项</div>
+        <div class="ana"><span class="cap">类比</span>数据面板：击杀、补刀、伤害自动统计</div>
+      </div>
+      <div class="card c">
+        <div class="card-label">用大模型判定 · 也叫 LLM Judge</div>
+        <div class="t">LLM Grader</div>
+        <div class="d">适合：需要<strong>理解语义</strong>的检查项</div>
+        <div class="ana"><span class="cap">类比</span>教练看录像点评：这波团该不该开</div>
+      </div>
+    </div>
+    <div class="bar">设计细节：证据不足的高风险问题，允许 LLM Grader 返回<strong>“无法判断”</strong></div>
+  </div>
+</section>
+
+<!-- P23 判几次 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>How · Step 3</span></div>
+  <div class="top-title">判定：同一个 Task 执行 k 次</div>
+  <div class="w">
+    <div class="two-col">
+      <div class="card c">
+        <div class="card-label">k 次里至少成功一次</div>
+        <div class="t xl mono">Pass@k</div>
+        <div class="d">衡量<strong>能力上限</strong></div>
+        <div class="ana"><span class="cap">类比</span>金铲铲十把，进过一次前四</div>
+        <div class="delta">美团优化后<strong>+22</strong>个百分点</div>
+      </div>
+      <div class="card c">
+        <div class="card-label">k 次全部成功</div>
+        <div class="t xl mono">Pass^k</div>
+        <div class="d">衡量<strong>执行稳定性</strong></div>
+        <div class="ana"><span class="cap">类比</span>金铲铲十把，把把前四</div>
+        <div class="delta">美团优化后<strong>+12</strong>个百分点</div>
+      </div>
+    </div>
+    <div class="bar">瓶颈：从“不会做”变成<strong>“不能稳定做对”</strong></div>
+  </div>
+</section>
+
+<!-- P24 第四步：离线与在线 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>How · Step 4</span></div>
+  <div class="top-title">第四步 · 离线评测与在线评测</div>
+  <div class="w">
+    <div class="ana"><span class="cap">类比</span>离线评测 = 训练赛　·　在线评测 = 正式比赛</div>
+    <div class="two-col">
+      <div class="card c">
+        <div class="card-label">Offline · 也叫回测</div>
+        <div class="t">离线评测</div>
+        <dl class="kv">
+          <dt>做法</dt><dd>固定评测集 + 固定环境，每次变更后重跑</dd>
+          <dt>作用</dt><dd>上线前的<strong>门控</strong></dd>
+          <dt>局限</dt><dd>只能发现<strong>已知</strong>的问题</dd>
+        </dl>
+      </div>
+      <div class="card c">
+        <div class="card-label">Online</div>
+        <div class="t">在线评测</div>
+        <dl class="kv">
+          <dt>做法</dt><dd>在真实线上环境里观察效果</dd>
+          <dt>手段</dt><dd><strong>巡检</strong>、<strong>AB 实验</strong></dd>
+          <dt>作用</dt><dd>发现<strong>未知</strong>的问题</dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- P25 巡检与 AB 实验 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>How · Step 4</span></div>
+  <div class="top-title">在线评测的两种手段</div>
+  <div class="w">
+    <div class="two-col">
+      <div class="card c">
+        <div class="card-label">周期性检查</div>
+        <div class="t">巡检</div>
+        <div class="d">周期性地用一批代表性任务检查线上表现</div>
+        <div class="duo">
+          <div><div class="n">20 条</div><div class="l">每天跑的黄金集样本</div></div>
+          <div><div class="n">&lt; 85%</div><div class="l">通过率低于它就报警</div></div>
+        </div>
+      </div>
+      <div class="card c">
+        <div class="card-label">对照比较</div>
+        <div class="t">AB 实验</div>
+        <div class="d">用户分成两组，分别使用新旧版本，比较<strong>业务指标</strong></div>
+        <div class="ana"><span class="cap">类比</span>同一条视频换两个封面，各推给一小拨人</div>
+      </div>
+    </div>
+    <div class="bar">美团的观点：黄金标准是<strong>线上 AB 实验的业务指标</strong>，离线评测用于回测把关</div>
+  </div>
+</section>
+
+<!-- P26 第五步：观测 Trace -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>How · Step 5</span></div>
+  <div class="top-title">第五步 · 观测：Trace</div>
+  <div class="w">
+    <div class="flow" style="grid-template-columns:0.9fr 1.1fr;gap:28px">
+      <div class="card c mid">
+        <div class="card-label">Definition · 定义</div>
+        <div class="t xl mono">Trace</div>
+        <div class="d">Agent 一次执行的<strong>全链路记录</strong></div>
+        <ul class="pts">
+          <li>每一次<strong>模型调用</strong>的输入输出</li>
+          <li>每一次<strong>工具调用</strong>的输入输出</li>
+        </ul>
+        <div class="ana"><span class="cap">类比</span>对局回放</div>
+        <div class="d"><strong>最小可归因</strong>：凭 Trace 能复现错误是怎么发生的</div>
+      </div>
+      <div class="trace">
+        <div class="hd">TRACE · 示意</div>
+        <div class="r"><span class="n">01</span><span class="k">用户输入</span><span>检查昨天的广告投放</span></div>
+        <div class="r"><span class="n">02</span><span class="k">模型调用</span><span>规划：先查数据，再出报告</span></div>
+        <div class="r bad"><span class="n">03</span><span class="k">工具调用</span><span>查询投放数据 · 日期 = 今天<em>← 错在这一步</em></span></div>
+        <div class="r"><span class="n">04</span><span class="k">模型调用</span><span>生成巡检报告</span></div>
+        <div class="r"><span class="n">05</span><span class="k">最终输出</span><span>一份结构完整的报告</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- P27 Case 挖掘 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>How · Step 5</span></div>
+  <div class="top-title">Case 挖掘：四类来源，各有盲区</div>
+  <div class="w">
+    <div class="def" style="font-size:32px"><strong>Case 挖掘</strong>：从线上找出值得分析的样本，放进 Case 池；出错的样本叫 <strong>Bad Case</strong></div>
+    <div class="four-col">
+      <div class="card c4">
+        <div class="t s">线上反馈</div>
+        <dl class="pc">
+          <dt>优势</dt><dd>信号最强</dd>
+          <dt>盲区</dt><dd>只看到用户愿意反馈的部分</dd>
+        </dl>
+      </div>
+      <div class="card c4">
+        <div class="t s">监控信号</div>
+        <dl class="pc">
+          <dt>优势</dt><dd>自动化程度高</dd>
+          <dt>盲区</dt><dd>只看到指标能刻画的问题</dd>
+        </dl>
+      </div>
+      <div class="card c4">
+        <div class="t s">业务规则筛选</div>
+        <dl class="pc">
+          <dt>优势</dt><dd>精准</dd>
+          <dt>盲区</dt><dd>只看到已经想到的风险</dd>
+        </dl>
+      </div>
+      <div class="card c4">
+        <div class="t s">随机采样</div>
+        <dl class="pc">
+          <dt>代价</dt><dd>成本最高、命中率最低</dd>
+          <dt>价值 · 不可省略</dt><dd><strong>唯一能发现“没想到的问题”的手段</strong></dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- P28 归因 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>How · Step 5</span></div>
+  <div class="top-title">归因：问题也可能出在评测标准</div>
+  <div class="w">
+    <div class="def" style="font-size:32px"><strong>归因</strong>：判断问题出在哪个环节、该由谁解决</div>
+    <div class="two-col">
+      <div class="card c mid">
+        <div class="card-label">OpenAI 审计 SWE-bench Verified</div>
+        <div class="stat-n" style="font-size:170px"><span class="hl">59.4%</span></div>
+        <div class="stat-l">138 道难以攻克的任务里，存在<strong style="color:var(--text)">任务描述或测试设计缺陷</strong></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:28px">
+        <div class="card c">
+          <div class="t s">拿 KDA 评价辅助</div>
+          <div class="ana" style="margin-top:16px"><span class="cap">类比</span>辅助的职责是保护队友、做视野，错的是评价标准</div>
+        </div>
+        <div class="card c">
+          <div class="card-label">美团自己的例子</div>
+          <ul class="pts" style="margin-top:0">
+            <li>规则要求<strong>严格按线性顺序</strong>调用工具</li>
+            <li>合理的并行做法被<strong>误判为失败</strong></li>
+            <li>改为只约束真实存在依赖的先后关系</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- P29 两条迭代闭环（L17 架构图逐节点展开） -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>How · Step 5</span></div>
+  <div class="top-title">两条迭代闭环</div>
+  <div class="anim-arch" style="max-width:1560px">
+    <svg viewBox="0 0 1400 440" class="arch-svg">
+      <g class="edges">
+        <path class="edge" data-from="1" data-to="2" d="M250 220 L350 220"/>
+        <path class="edge" data-from="2" data-to="3" d="M600 200 C 680 200, 650 80, 730 80"/>
+        <path class="edge" data-from="2" data-to="4" d="M600 240 C 680 240, 650 360, 730 360"/>
+        <path class="edge" data-from="3" data-to="5" d="M980 80 C 1080 80, 1050 200, 1150 200"/>
+        <path class="edge" data-from="4" data-to="5" d="M980 360 C 1080 360, 1050 240, 1150 240"/>
+      </g>
+      <g class="nodes">
+        <g class="node" data-n="1" transform="translate(0,160)">
+          <rect width="250" height="120" rx="14"/>
+          <text x="125" y="56" text-anchor="middle" class="nlabel" style="font-size:30px">Case 挖掘</text>
+          <text x="125" y="90" text-anchor="middle" class="nsub" style="font-size:17px">找出 Bad Case</text>
+        </g>
+        <g class="node" data-n="2" transform="translate(350,160)">
+          <rect width="250" height="120" rx="14"/>
+          <text x="125" y="56" text-anchor="middle" class="nlabel" style="font-size:30px">归因</text>
+          <text x="125" y="90" text-anchor="middle" class="nsub" style="font-size:17px">问题出在哪个环节</text>
+        </g>
+        <g class="node" data-n="3" transform="translate(730,20)">
+          <rect width="250" height="120" rx="14"/>
+          <text x="125" y="56" text-anchor="middle" class="nlabel" style="font-size:30px">改 Agent</text>
+          <text x="125" y="90" text-anchor="middle" class="nsub" style="font-size:17px">问题在 Agent</text>
+        </g>
+        <g class="node" data-n="4" transform="translate(730,300)">
+          <rect width="250" height="120" rx="14"/>
+          <text x="125" y="56" text-anchor="middle" class="nlabel" style="font-size:30px">改评测</text>
+          <text x="125" y="90" text-anchor="middle" class="nsub" style="font-size:17px">问题在评测集或标准</text>
+        </g>
+        <g class="node" data-n="5" transform="translate(1150,160)">
+          <rect width="250" height="120" rx="14"/>
+          <text x="125" y="56" text-anchor="middle" class="nlabel" style="font-size:30px">重新评测</text>
+          <text x="125" y="90" text-anchor="middle" class="nsub" style="font-size:17px">验证改动</text>
+        </g>
+      </g>
+    </svg>
+    <div class="anim-controls">
+      <button class="anim-btn primary" data-act="next">下一节点 →</button>
+      <button class="anim-btn" data-act="all">展开全部</button>
+      <button class="anim-btn" data-act="reset">↻ 重置</button>
+      <span class="anim-step"><span data-out="cur">1</span> / <span data-out="total">5</span></span>
+    </div>
+  </div>
+</section>
+
+<!-- P30 两个关键认识 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>How · Step 5</span></div>
+  <div class="top-title">两个关键认识</div>
+  <div class="w big">
+    <div class="two-col">
+      <div class="card c">
+        <div class="card-label">认识一</div>
+        <div class="t s">评测误判减少</div>
+        <div class="eqs"><span>=</span>尺子更准了</div>
+        <div class="eqs" style="margin-top:0"><span>≠</span>Agent 能力提升了</div>
+      </div>
+      <div class="card c">
+        <div class="card-label">认识二 · 如果默认</div>
+        <div class="t s">“评测说不行 = Agent 不行”</div>
+        <div class="eqs"><span>→</span>Agent 被优化成迎合评测标准</div>
+        <div class="eqs" style="margin-top:0"><span>≠</span>解决用户问题</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- P31 评测工具 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>How · Tools</span></div>
+  <div class="top-title">评测工具：三类</div>
+  <div class="w">
+    <div class="three-col">
+      <div class="card c v">
+        <div class="card-label">第一类</div>
+        <div class="t s">第三方产品</div>
+        <div class="minis"><span class="mini">Arize AI</span><span class="mini">LangFuse</span><span class="mini">Braintrust</span></div>
+        <div class="d sm">对在线评测、监控、观测的概念划分<strong>并不一致</strong>，行业还没有统一标准</div>
+      </div>
+      <div class="card c v">
+        <div class="card-label">第二类 · 美团图灵评测平台</div>
+        <div class="t s">自建平台</div>
+        <div class="minis"><span class="mini">Task 集管理</span><span class="mini">环境配置</span><span class="mini">Evaluator 自动判定</span><span class="mini">人工质检</span><span class="mini">Pipeline 批量执行</span><span class="mini">评测报告</span></div>
+      </div>
+      <div class="card c v">
+        <div class="card-label">第三类 · 公开的标准评测集</div>
+        <div class="t s">公开 Benchmark</div>
+        <div class="minis"><span class="mini">SWE-Bench Pro</span><span class="mini">τ-bench</span></div>
+        <div class="d sm">方法可以借鉴，成绩<strong>不能作为上线依据</strong></div>
+        <div class="ana sm"><span class="cap">类比</span>天梯榜：排第一的英雄，不一定适合你这一局</div>
+      </div>
+    </div>
+    <div class="bar">工具解决的是<strong>效率问题</strong>；评什么、标准是什么，要团队自己定义</div>
+  </div>
+</section>
+
+<!-- P32 从哪里起步 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>How · 起步</span></div>
+  <div class="top-title">从哪里起步：最小闭环</div>
+  <div class="w">
+    <div class="bar">全景图是<strong>终局</strong>，不是起点；冷启动阶段只需要三样</div>
+    <div class="three-col">
+      <div class="step-card">
+        <div class="step-num">01</div>
+        <div class="step-title">观测</div>
+        <div class="step-desc" style="font-size:28px">有<strong>完整 Trace</strong>，可以人工回放</div>
+      </div>
+      <div class="step-card">
+        <div class="step-num">02</div>
+        <div class="step-title">评测集</div>
+        <div class="step-desc" style="font-size:28px">一套小规模的<strong>端到端种子集</strong></div>
+      </div>
+      <div class="step-card">
+        <div class="step-num">03</div>
+        <div class="step-title">回测</div>
+        <div class="step-desc" style="font-size:28px"><strong>发版前</strong>跑一遍</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- P33 美团的结果 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>How · 结果</span></div>
+  <div class="top-title">美团的结果</div>
+  <div class="w">
+    <div class="three-col">
+      <div class="card c">
+        <div class="stat-n">+17</div>
+        <div class="stat-l">任务完成率 · 百分点</div>
+      </div>
+      <div class="card c">
+        <div class="stat-n">−52<span class="u">%</span></div>
+        <div class="stat-l">平均 Token 消耗</div>
+      </div>
+      <div class="card c">
+        <div class="stat-n">−53<span class="u">%</span></div>
+        <div class="stat-l">平均耗时</div>
+      </div>
+    </div>
+    <div class="note">离线指标 · 幅度经过脱敏</div>
+    <div class="card c">
+      <div class="card-label">优化原则</div>
+      <div class="def" style="font-size:34px">减少模型需要记忆和自由判断的<strong>确定性约束</strong></div>
+      <div class="minis"><span class="mini">规则进配置</span><span class="mini">分支条件写明</span><span class="mini">解析和计算交给代码</span><span class="mini">模型聚焦流程调度、条件理解、业务表达</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- P34 总结 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>Summary</span></div>
+  <div class="top-title">总结</div>
+  <div class="w">
+    <div class="card c sum">
+      <div class="k">WHAT</div>
+      <div class="v">对 Agent 效果的<strong>系统性度量</strong>：好不好，哪里不好</div>
+    </div>
+    <div class="card c sum">
+      <div class="k">WHY</div>
+      <div class="v">输出有<strong>随机性</strong>，出错时<strong>不会报错</strong>；没有评测，就没有决策依据</div>
+    </div>
+    <div class="card c sum">
+      <div class="k">HOW</div>
+      <div class="v">评测集 → 评分标准 → 判定 → 离线与在线 → 观测与归因<br><strong>评测体系自身也要迭代</strong></div>
+    </div>
+  </div>
+</section>
+
+<!-- P35 术语速查 -->
+<section class="slide center">
+  <div class="slide-header"><span></span><span>Glossary · 悬停查看解释</span></div>
+  <div class="top-title">术语速查</div>
+  <div class="tag-row" style="max-width:1420px;justify-content:center;text-align:left">
+    <span class="tag">Agent · 智能体
+      <div class="tag-tooltip">能自己规划并完成任务的 AI 系统。</div>
+    </span>
+    <span class="tag">评测 · Eval
+      <div class="tag-tooltip">对 Agent 效果的系统性度量。<br><strong>类比</strong> · 战队试训和复盘</div>
+    </span>
+    <span class="tag">端到端评测
+      <div class="tag-tooltip">看最终结果：事有没有办成。</div>
+    </span>
+    <span class="tag">过程评测
+      <div class="tag-tooltip">看中间步骤：哪一步出了问题。</div>
+    </span>
+    <span class="tag">人人一致 · 人机一致
+      <div class="tag-tooltip">不同的人、人和机器打分一致。<br><strong>类比</strong> · 两个审核员审同一条视频</div>
+    </span>
+    <span class="tag">评测集 · Task
+      <div class="tag-tooltip">一批固定的测试任务；其中的一个任务。</div>
+    </span>
+    <span class="tag">黄金集 · 错题集
+      <div class="tag-tooltip">正确的样本；出过错的样本。</div>
+    </span>
+    <span class="tag">Rubric
+      <div class="tag-tooltip">评分细则，要求二元化：每一条只能回答是或否。</div>
+    </span>
+    <span class="tag">一票否决
+      <div class="tag-tooltip">一条不过，即判失败。</div>
+    </span>
+    <span class="tag">确定性 Grader
+      <div class="tag-tooltip">用规则和代码判定。<br><strong>类比</strong> · 数据面板</div>
+    </span>
+    <span class="tag">LLM Grader
+      <div class="tag-tooltip">用大模型判定，也叫 LLM Judge。<br><strong>类比</strong> · 教练点评</div>
+    </span>
+    <span class="tag">Pass@k
+      <div class="tag-tooltip">k 次里至少成功一次，衡量能力上限。<br><strong>类比</strong> · 进过一次前四</div>
+    </span>
+    <span class="tag">Pass^k
+      <div class="tag-tooltip">k 次全部成功，衡量执行稳定性。<br><strong>类比</strong> · 把把前四</div>
+    </span>
+    <span class="tag">离线评测 · 回测
+      <div class="tag-tooltip">上线前用固定评测集验证。<br><strong>类比</strong> · 训练赛</div>
+    </span>
+    <span class="tag">在线评测
+      <div class="tag-tooltip">在真实线上环境观察效果。<br><strong>类比</strong> · 正式比赛</div>
+    </span>
+    <span class="tag">巡检
+      <div class="tag-tooltip">周期性检查线上表现。</div>
+    </span>
+    <span class="tag">AB 实验
+      <div class="tag-tooltip">两组用户对比新旧版本。<br><strong>类比</strong> · 视频换两个封面</div>
+    </span>
+    <span class="tag">Trace
+      <div class="tag-tooltip">Agent 一次执行的全链路记录。<br><strong>类比</strong> · 对局回放</div>
+    </span>
+    <span class="tag">Case 挖掘 · Bad Case
+      <div class="tag-tooltip">找出值得分析的样本；出错的样本。</div>
+    </span>
+    <span class="tag">归因
+      <div class="tag-tooltip">判断问题出在哪个环节、该由谁解决。<br><strong>类比</strong> · 拿 KDA 评价辅助</div>
+    </span>
+    <span class="tag">幻觉
+      <div class="tag-tooltip">模型自信地给出错误内容。</div>
+    </span>
+    <span class="tag">Benchmark
+      <div class="tag-tooltip">公开的标准评测集。<br><strong>类比</strong> · 天梯榜</div>
+    </span>
+  </div>
+</section>
+
+<!-- P36 思考题 -->
+<section class="slide">
+  <div class="slide-header"><span>Homework</span><span>思考题</span></div>
+  <div class="eyebrow">Homework · 思考题</div>
+  <h2 class="display h-m" style="max-width:1380px">
+    给“帮用户订餐厅”的 Agent<br>
+    设计三个 Task
+  </h2>
+  <p class="body-xl mt-xl" style="max-width:1380px">
+    并为每个 Task 写出<span class="hl">二元化</span>的评分标准
+  </p>
+</section>
+
+
+<!-- 修订 al：controls 移进 stage，position:absolute 跟随 stage scale -->
+<div class="controls">
+  <button id="prev">‹</button>
+  <div class="counter"><span id="current">1</span> / <span id="total">1</span></div>
+  <button id="next">›</button>
+</div>
+
+</div>
+
+<script>
+// 舞台等比缩放
+function scaleStage() {
+  const stage = document.getElementById('stage');
+  const scale = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+  stage.style.setProperty('--scale', scale);
+}
+window.addEventListener('resize', scaleStage);
+scaleStage();
+
+const slides = document.querySelectorAll('.slide');
+const tocItems = document.querySelectorAll('.toc-item');
+const total = slides.length;
+let current = 0;
+document.getElementById('total').textContent = total;
+
+// 交互动画 iframe：切到该页才开始播放（修订 aa）——
+// 初始化时把 src 收进 data-src，进页装载（动画从头播）、离页卸载（归零 + 省资源）
+slides.forEach((s) => s.querySelectorAll('iframe[src]').forEach((f) => {
+  f.dataset.src = f.getAttribute('src');
+  f.removeAttribute('src');
+}));
+function syncFrames() {
+  slides.forEach((s, i) => s.querySelectorAll('iframe[data-src]').forEach((f) => {
+    if (i === current) { if (!f.getAttribute('src')) f.setAttribute('src', f.dataset.src); }
+    else if (f.getAttribute('src')) f.removeAttribute('src');
+  }));
+}
+
+function show(idx) {
+  const prev = current;
+  current = Math.max(0, Math.min(total - 1, idx));
+  // 方向感知水平推移
+  const dir = current >= prev ? 1 : -1;
+  slides[prev].style.setProperty('--dx', (-dir * 24) + 'px');
+  slides[current].style.setProperty('--dx', (dir * 24) + 'px');
+  void slides[current].offsetWidth;
+  slides.forEach((s, i) => s.classList.toggle('active', i === current));
+  syncFrames();
+  // 目录树高亮：当前页若无独立条目，归属的上一条目常亮（修订 w）
+  let best = -1;
+  tocItems.forEach((a) => { const v = +a.dataset.idx; if (v <= current && v > best) best = v; });
+  tocItems.forEach((a) => a.classList.toggle('active', +a.dataset.idx === best));
+  // 修订 aj/ak：目录条目总高度超过侧栏 (typical 1480px > 952px) 时，必须把 active 滚到可见区。
+  // 但绝不能用 scrollIntoView——即使 .stage 是 overflow:hidden，scrollIntoView 仍会逐层向祖先
+  // 冒泡设置 scrollTop（hidden 只裁切视觉、不阻止编程式滚动），结果把整个舞台连同左上 logo / 右
+  // 上读数一起推上去 ~100px。改成 toc.scrollTo——只影响 toc 自己，不冒泡。
+  const activeEl = document.querySelector('.toc-item.active');
+  const tocEl = document.querySelector('.toc');
+  if (activeEl && tocEl) {
+    const target = activeEl.offsetTop - tocEl.clientHeight / 2 + activeEl.clientHeight / 2;
+    tocEl.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+  }
+  document.getElementById('current').textContent = current + 1;
+  document.getElementById('progress').style.width = ((current + 1) / total * 100) + '%';
+  document.getElementById('theta').textContent = ((current * 37 % 90) / 10 - 4.5).toFixed(1);
+}
+
+document.getElementById('next').addEventListener('click', (e) => { e.stopPropagation(); e.currentTarget.blur(); show(current + 1); });
+document.getElementById('prev').addEventListener('click', (e) => { e.stopPropagation(); e.currentTarget.blur(); show(current - 1); });
+// 目录树点击跳页
+tocItems.forEach((a) => a.addEventListener('click', () => show(+a.dataset.idx)));
+
+// iframe 键盘导航转发（修订 ab）：动画/交互页内按 ←/→ 时由 iframe postMessage 上报翻页。
+// 取代旧的 blur 抢焦点方案——抢焦点会打断 iframe 内的文本输入（交互工具页有输入框）。
+window.addEventListener('message', (e) => {
+  const k = e.data && e.data.deckNav;
+  if (k === 'ArrowRight' || k === 'PageDown') show(current + 1);
+  else if (k === 'ArrowLeft' || k === 'PageUp') show(current - 1);
+});
+
+document.addEventListener('keydown', (e) => {
+  // 修订 al：input/textarea/contenteditable 聚焦时不响应翻页键——否则在交互页输入框
+  // 里按 ←/→ 会翻页而不是移动光标（MDN a11y 标准做法 document.activeElement 检测）
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+  if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') { e.preventDefault(); show(current + 1); }
+  else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); show(current - 1); }
+  else if (e.key === 'Home') show(0);
+  else if (e.key === 'End') show(total - 1);
+});
+
+show(0);
+
+// ===== 右下实时读数：鼠标坐标 + fps =====
+const mxEl = document.getElementById('mx'), myEl = document.getElementById('my');
+document.addEventListener('mousemove', (e) => {
+  const r = document.getElementById('stage').getBoundingClientRect();
+  const sc = r.width / 1920;
+  const x = Math.max(0, Math.min(1920, Math.round((e.clientX - r.left) / sc)));
+  const y = Math.max(0, Math.min(1080, Math.round((e.clientY - r.top) / sc)));
+  mxEl.textContent = String(x).padStart(4, '0');
+  myEl.textContent = String(y).padStart(4, '0');
+});
+const fpsEl = document.getElementById('fps');
+let fpsLast = performance.now(), fpsFrames = 0;
+(function fpsLoop(now) {
+  requestAnimationFrame(fpsLoop);
+  fpsFrames++;
+  if (now - fpsLast >= 500) {
+    fpsEl.textContent = Math.round(fpsFrames * 1000 / (now - fpsLast));
+    fpsFrames = 0; fpsLast = now;
+  }
+})(performance.now());
+
+// ===== 章节页裁切标记 =====
+slides.forEach((slide) => {
+  const ch = slide.querySelector('.chapter');
+  if (!ch) return;
+  const crop = document.createElement('div');
+  crop.className = 'crop';
+  crop.innerHTML = '<i class="tl"></i><i class="tr"></i><i class="bl"></i><i class="br"></i>';
+  ch.appendChild(crop);
+});
+
+// ===== 交互流程范式（修订 am）：四种容器自动绑定 =====
+// 找到 .anim-* 容器即生效，没找到则零成本静默。每个 pattern 内多实例互不干扰。
+// 行为约定：默认显示初态（preview），用户点按钮才动；不在进页时自动播放（避免无声耗资源）。
+
+// A. IDE 代码回放
+// 用法：.anim-ide > .ide-body > .ide-code (含 .ln[data-l]) + .ide-console-body
+// 在 .ide-console-body 内放 <div class="ide-out" data-after-line="2">Hello</div>，
+// 行 2 走完时这条 out 淡入。
+document.querySelectorAll('.anim-ide').forEach((root) => {
+  const lines = root.querySelectorAll('.ide-code .ln');
+  const outs = root.querySelectorAll('.ide-console-body .ide-out');
+  const runBtn = root.querySelector('[data-act="run"]');
+  const resetBtn = root.querySelector('[data-act="reset"]');
+  if (!lines.length || !runBtn) return;
+  const logsByLine = {};
+  outs.forEach((o) => { const l = +o.dataset.afterLine; (logsByLine[l] = logsByLine[l] || []).push(o); });
+  let timers = [];
+  const clear = () => { timers.forEach(clearTimeout); timers = []; };
+  function reset() {
+    clear();
+    lines.forEach((ln) => ln.classList.remove('active', 'done'));
+    outs.forEach((o) => o.classList.remove('show'));
+    runBtn.textContent = '▶ 运行'; runBtn.disabled = false;
+  }
+  function run() {
+    reset();
+    runBtn.disabled = true; runBtn.textContent = '运行中…';
+    let delay = 0;
+    lines.forEach((ln) => {
+      timers.push(setTimeout(() => { lines.forEach((x) => x.classList.remove('active')); ln.classList.add('active'); }, delay));
+      delay += 520;
+      const l = +ln.dataset.l;
+      (logsByLine[l] || []).forEach((o) => timers.push(setTimeout(() => o.classList.add('show'), delay - 100)));
+      timers.push(setTimeout(() => ln.classList.add('done'), delay - 50));
+    });
+    timers.push(setTimeout(() => {
+      lines.forEach((x) => x.classList.remove('active'));
+      runBtn.textContent = '↻ 重放'; runBtn.disabled = false;
+    }, delay + 200));
+  }
+  runBtn.addEventListener('click', run);
+  if (resetBtn) resetBtn.addEventListener('click', reset);
+});
+
+// B. 架构图逐节点展开
+// 用法：.anim-arch > svg.arch-svg
+//   节点 <g class="node" data-n="1">…</g>（n 从 1 开始连号）
+//   边线 <path class="edge" data-from="1" data-to="2"/>（两端都 revealed 才画）
+//   控件按 [data-act="next"|"all"|"reset"]，[data-out="cur"|"total"] 显示进度
+document.querySelectorAll('.anim-arch').forEach((root) => {
+  const nodes = Array.from(root.querySelectorAll('.node'));
+  const edges = Array.from(root.querySelectorAll('.edge'));
+  const next = root.querySelector('[data-act="next"]');
+  const all = root.querySelector('[data-act="all"]');
+  const resetBtn = root.querySelector('[data-act="reset"]');
+  const curEl = root.querySelector('[data-out="cur"]');
+  const totalEl = root.querySelector('[data-out="total"]');
+  if (!nodes.length) return;
+  if (totalEl) totalEl.textContent = nodes.length;
+  let step = 1;
+  function paint() {
+    nodes.forEach((n) => { const i = +n.dataset.n; n.classList.toggle('on', i <= step); n.classList.toggle('current', i === step); });
+    edges.forEach((e) => { const f = +e.dataset.from, t = +e.dataset.to; e.classList.toggle('on', f <= step && t <= step); });
+    if (curEl) curEl.textContent = step;
+  }
+  if (next) next.addEventListener('click', () => { if (step < nodes.length) step++; paint(); });
+  if (all) all.addEventListener('click', () => { step = nodes.length; paint(); });
+  if (resetBtn) resetBtn.addEventListener('click', () => { step = 1; paint(); });
+  paint();
+});
+
+// C. 循环演示（自动播放 / 暂停）
+// 用法：.anim-loop > svg.loop-svg
+//   节点 <g class="lnode" data-n="0|1|2|…">；边 <path class="loop-edge" data-from="0" data-to="1">
+//   每拍 N(默认1100ms)：高亮节点 i，点亮从 i 指向 i+1 的边；自动循环 i = (i+1) % count
+//   控件：[data-act="play"|"reset"]，[data-out="stage"] 显示当前节点 .nlabel 文本
+document.querySelectorAll('.anim-loop').forEach((root) => {
+  const nodes = Array.from(root.querySelectorAll('.lnode'));
+  const edges = Array.from(root.querySelectorAll('.loop-edge'));
+  const playBtn = root.querySelector('[data-act="play"]');
+  const resetBtn = root.querySelector('[data-act="reset"]');
+  const stageEl = root.querySelector('[data-out="stage"]');
+  const interval = +(root.dataset.interval || 1100);
+  if (!nodes.length || !playBtn) return;
+  const names = nodes.map((n) => (n.querySelector('.nlabel') || {}).textContent || '');
+  let tick = 0, timer = null, playing = false;
+  function paint() {
+    nodes.forEach((n, i) => n.classList.toggle('on', i === tick));
+    edges.forEach((e) => { const f = +e.dataset.from, t = +e.dataset.to; e.classList.toggle('on', f === ((tick + nodes.length - 1) % nodes.length) && t === tick); });
+    if (stageEl) stageEl.textContent = names[tick];
+  }
+  function play() {
+    if (playing) { clearInterval(timer); playing = false; playBtn.textContent = '▶ 播放'; return; }
+    playing = true; playBtn.textContent = '⏸ 暂停';
+    timer = setInterval(() => { tick = (tick + 1) % nodes.length; paint(); }, interval);
+  }
+  function reset() { clearInterval(timer); playing = false; playBtn.textContent = '▶ 播放'; tick = 0; paint(); }
+  playBtn.addEventListener('click', play);
+  if (resetBtn) resetBtn.addEventListener('click', reset);
+  paint();
+});
+
+// D. 分步管线
+// 用法：.anim-pipe > .pipe-row > .pipe-stage[data-s="0|1|…"]
+//   叙述区 .pipe-narration > .pn-body 由脚本根据 data-narration 切换
+//   .anim-pipe 上挂 data-narration='["初始话术","步骤1话术",…]'(JSON)，长度 = 步数 + 1
+//   控件：[data-act="next"|"reset"]，[data-out="cur"]
+document.querySelectorAll('.anim-pipe').forEach((root) => {
+  const stages = Array.from(root.querySelectorAll('.pipe-stage'));
+  const next = root.querySelector('[data-act="next"]');
+  const resetBtn = root.querySelector('[data-act="reset"]');
+  const curEl = root.querySelector('[data-out="cur"]');
+  const narr = root.querySelector('.pn-body');
+  if (!stages.length || !next) return;
+  let texts = [];
+  try { texts = JSON.parse(root.dataset.narration || '[]'); } catch (e) { texts = []; }
+  let s = 0;
+  function paint() {
+    stages.forEach((st, i) => {
+      st.classList.toggle('active', i === s - 1);
+      st.classList.toggle('done', s === stages.length ? i < s : i < s - 1);
+    });
+    if (curEl) curEl.textContent = s;
+    if (narr && texts[s] !== undefined) narr.innerHTML = texts[s];
+  }
+  next.addEventListener('click', () => { if (s < stages.length) s++; paint(); });
+  if (resetBtn) resetBtn.addEventListener('click', () => { s = 0; paint(); });
+  paint();
+});
+
+// ===== 封面副标题打字机（循环：打完停顿 → 回删 → 重打） =====
+(function typer() {
+  const el = slides[0] && slides[0].querySelector('.body-xl');
+  if (!el) return;
+  const txt = el.textContent.trim();
+  el.textContent = '';
+  const tn = document.createTextNode('');
+  const cur = document.createElement('span');
+  cur.className = 'cursor';
+  el.append(tn, cur);
+  let i = 0, mode = 'type';
+  function tick() {
+    if (mode === 'type') {
+      tn.textContent = txt.slice(0, ++i);
+      if (i >= txt.length) { mode = 'erase'; setTimeout(tick, 2600); return; }
+      setTimeout(tick, 65);
+    } else {
+      tn.textContent = txt.slice(0, --i);
+      if (i <= 0) { mode = 'type'; setTimeout(tick, 900); return; }
+      setTimeout(tick, 28);
+    }
+  }
+  setTimeout(tick, 400);
+})();
+</script>
+
+<script>
+// ===== 演讲者注释（本 deck 增补）=====
+// 话术写在每页的 <aside class="notes"> 里，页面上永远不显示；
+// 按 N（或点翻页条上的「注」）打开一个独立窗口显示当前页话术。
+// 课件窗口投到大屏，注释窗口留在自己的电脑屏幕上，两边翻页同步。
+// 用 window.open('') + 直接写入的方式实现，双击打开本地文件也能用。
+(function speakerNotes() {
+  const noteHtml = Array.from(slides).map((s) => {
+    const n = s.querySelector('aside.notes');
+    return n ? n.innerHTML.trim() : '';
+  });
+  const titleOf = (i) => {
+    const item = document.querySelector('.toc-item[data-idx="' + i + '"]');
+    return item ? item.textContent.trim() : '第 ' + (i + 1) + ' 页';
+  };
+
+  const PAGE = [
+    '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>演讲者注释 · 不要投屏</title><style>',
+    '*{margin:0;padding:0;box-sizing:border-box}',
+    'html,body{height:100%}',
+    'body{font-family:Inter,"Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;background:#ffffff;color:#111111;display:flex;flex-direction:column;-webkit-font-smoothing:antialiased}',
+    'header{flex-shrink:0;padding:20px 28px 16px;border-bottom:1px solid #e6e6e6}',
+    '.meta{display:flex;justify-content:space-between;align-items:center;font-size:13px;letter-spacing:2px;color:#6b7280}',
+    '.meta b{color:#111111;font-weight:700}',
+    '#title{font-size:30px;font-weight:700;margin-top:10px;line-height:1.3}',
+    'main{flex:1;overflow-y:auto;padding:24px 28px 32px;font-size:var(--fs,26px);line-height:1.75}',
+    'main p{margin-bottom:.9em}',
+    'main p.tr{color:#4b5563;border-left:3px solid #00e75e;padding-left:.7em}',
+    'main p.tr::before{content:"过渡";display:block;font-size:13px;letter-spacing:3px;color:#0a8a3e;font-weight:600;margin-bottom:2px}',
+    'main p.op{font-size:.72em;color:#6b7280}',
+    'main p.op::before{content:"操作 · "}',
+    'main h4{font-size:.72em;font-weight:600;letter-spacing:1px;color:#0a8a3e;margin:1.4em 0 .7em;padding-top:1.1em;border-top:1px solid #e6e6e6}',
+    'main .empty{color:#9ca3af}',
+    'footer{flex-shrink:0;padding:14px 28px 18px;border-top:1px solid #e6e6e6;display:flex;align-items:center;gap:10px}',
+    '#next{flex:1;min-width:0;font-size:16px;color:#6b7280;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}',
+    '#next b{color:#111111;font-weight:600}',
+    'button{font:inherit;font-size:16px;min-width:44px;height:40px;padding:0 14px;border-radius:100px;border:1px solid #d4d4d4;background:#ffffff;color:#111111;cursor:pointer}',
+    'button:hover{border-color:#111111}',
+    'button.go{background:#111111;color:#ffffff;border-color:#111111;font-weight:600}',
+    '</style></head><body>',
+    '<header><div class="meta"><span>演讲者注释 · 本窗口不要投屏</span><span><b id="cur">1</b> / <span id="tot">1</span></span></div><div id="title"></div></header>',
+    '<main id="body"></main>',
+    '<footer><div id="next"></div>',
+    '<button id="sm" title="字号减小">A−</button><button id="lg" title="字号加大">A+</button>',
+    '<button id="prev" title="上一页 (←)">‹</button><button id="nxt" class="go" title="下一页 (→)">下一页 ›</button></footer>',
+    '</body></html>',
+  ].join('');
+
+  let win = null;
+  let fontSize = 26;
+
+  function render() {
+    if (!win || win.closed) return;
+    const d = win.document;
+    d.getElementById('cur').textContent = current + 1;
+    d.getElementById('tot').textContent = total;
+    d.getElementById('title').textContent = titleOf(current);
+    const body = d.getElementById('body');
+    body.innerHTML = noteHtml[current] || '<p class="empty">这一页没有话术。</p>';
+    body.scrollTop = 0;
+    d.getElementById('next').innerHTML = current + 1 < total
+      ? '下一页：<b>' + titleOf(current + 1) + '</b>'
+      : '已经是最后一页';
+  }
+
+  function setFont(delta) {
+    fontSize = Math.max(18, Math.min(44, fontSize + delta));
+    if (win && !win.closed) win.document.documentElement.style.setProperty('--fs', fontSize + 'px');
+  }
+
+  function openNotes() {
+    if (win && !win.closed) { win.focus(); return; }
+    win = window.open('', 'coursedeck_speaker_notes', 'width=720,height=860');
+    if (!win) {
+      alert('浏览器拦截了弹出窗口。请允许本页面弹出窗口，然后再按一次 N。');
+      return;
+    }
+    win.document.open();
+    win.document.write(PAGE);
+    win.document.close();
+    const d = win.document;
+    d.documentElement.style.setProperty('--fs', fontSize + 'px');
+    d.getElementById('prev').addEventListener('click', () => show(current - 1));
+    d.getElementById('nxt').addEventListener('click', () => show(current + 1));
+    d.getElementById('sm').addEventListener('click', () => setFont(-2));
+    d.getElementById('lg').addEventListener('click', () => setFont(2));
+    // 焦点在注释窗口时，方向键同样控制课件翻页
+    d.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') { e.preventDefault(); show(current + 1); }
+      else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); show(current - 1); }
+      else if (e.key === 'Home') show(0);
+      else if (e.key === 'End') show(total - 1);
+    });
+    render();
+  }
+
+  // 课件每次翻页后同步注释窗口（键盘、目录点击、翻页按钮都走 show）
+  const baseShow = window.show;
+  window.show = function (idx) { baseShow(idx); render(); };
+
+  document.addEventListener('keydown', (e) => {
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if ((e.key === 'n' || e.key === 'N') && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); openNotes(); }
+  });
+
+  // 翻页条上加一个「注」按钮，作用同按 N
+  const controls = document.querySelector('.controls');
+  if (controls) {
+    const btn = document.createElement('button');
+    btn.id = 'notesBtn';
+    btn.textContent = '注';
+    btn.title = '打开演讲者注释 (N)';
+    btn.style.fontSize = '13px';
+    btn.addEventListener('click', (e) => { e.stopPropagation(); btn.blur(); openNotes(); });
+    controls.appendChild(btn);
+  }
+
+  window.addEventListener('beforeunload', () => { if (win && !win.closed) win.close(); });
+  window.openSpeakerNotes = openNotes;
+})();
+</script>
+
+</body>
+</html>
