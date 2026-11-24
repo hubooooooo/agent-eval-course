@@ -104,24 +104,20 @@ Agent 能自己规划、调用工具、把事办完，但它办得好不好，�
 
 ## 📁 仓库结构
 
-```
-agent-eval-course/
-├── README.md
-├── Agent评测课-内容.md        # 课程内容：知识点、案例、六点看法、术语表
-├── 课件/
-│   └── Agent评测课.html       # 单文件 HTML 课件，1920×1080，37 页
-├── 参考文章/                  # 两篇原文的 PDF，保留原文配图
-│   ├── 《Agent评测白皮书》系列01：Agent评测全览.pdf
-│   └── 《Agent评测白皮书》系列02：商家AI助手的评测与优化闭环实践.pdf
-└── assets/                    # README 用到的横幅与课件截图
-```
+| 路径 | 内容 |
+|:--|:--|
+| 📝 [`Agent评测课-内容.md`](Agent评测课-内容.md) | 课程内容：知识点、案例、六点看法、术语表 |
+| 🖥️ [`课件/Agent评测课.html`](课件/Agent评测课.html) | 单文件 HTML 课件，1920×1080，共 37 页 |
+| 📚 [`参考文章/`](参考文章/) | 两篇原文的 PDF，保留原文配图 |
+| 🖼️ [`assets/`](assets/) | README 用到的横幅与课件截图 |
 
 ## 📚 参考资料
 
-| 文章 | 作者 | 发布日期 | 下载 |
-|:--|:--|:--|:--|
-| [《Agent 评测白皮书》系列01：Agent 评测全览](https://tech.meituan.com/2026/09/10/Agent-Evaluation-White-Paper-01.html) | 美团技术团队 | 2026-09-10 | [PDF](参考文章/《Agent评测白皮书》系列01：Agent评测全览.pdf) |
-| [《Agent评测白皮书》系列02：商家 AI 助手的评测与优化闭环实践](https://tech.meituan.com/2026/11/17/Agent-Evaluation-White-Paper-02.html) | 美团技术团队 | 2026-11-17 | [PDF](参考文章/《Agent评测白皮书》系列02：商家AI助手的评测与优化闭环实践.pdf) |
+**《Agent 评测白皮书》系列01：Agent 评测全览**<br>
+美团技术团队 · 2026-09-10 · [阅读原文](https://tech.meituan.com/2026/09/10/Agent-Evaluation-White-Paper-01.html) · [下载 PDF](参考文章/《Agent评测白皮书》系列01：Agent评测全览.pdf)
+
+**《Agent 评测白皮书》系列02：商家 AI 助手的评测与优化闭环实践**<br>
+美团技术团队 · 2026-11-17 · [阅读原文](https://tech.meituan.com/2026/11/17/Agent-Evaluation-White-Paper-02.html) · [下载 PDF](参考文章/《Agent评测白皮书》系列02：商家AI助手的评测与优化闭环实践.pdf)
 
 > [!NOTE]
 > `参考文章/` 中的 PDF 由上述网页打印生成，版权归原作者及美团技术团队所有，仅供学习参考。课程中的观点与六点看法为讲者个人理解，不代表美团技术团队。
