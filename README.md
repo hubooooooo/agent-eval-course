@@ -1,10 +1,8 @@
 <div align="center">
 
-<a href="https://www.douyin.com/video/7711626260706757888"><img src="assets/cover.jpg" alt="Agent 评测课封面" width="100%"></a>
+<a href="https://www.douyin.com/video/7711626260706757888"><img src="assets/banner.jpg" alt="Agent 评测课：评测是什么、为什么重要、怎么做" width="100%"></a>
 
-# Agent 评测课
-
-**写给 AI 产品经理的 Agent 评测入门：是什么 · 为什么重要 · 怎么做**
+**写给 AI 产品经理的 Agent 评测入门课 · 附课程视频、课件与参考原文**
 
 [![课程视频](https://img.shields.io/badge/%E8%AF%BE%E7%A8%8B%E8%A7%86%E9%A2%91-%E6%8A%96%E9%9F%B3%E8%A7%82%E7%9C%8B-111111?style=for-the-badge&logo=tiktok&logoColor=white)](https://www.douyin.com/video/7711626260706757888)
 [![课件](https://img.shields.io/badge/%E8%AF%BE%E4%BB%B6-HTML%20%C2%B7%2037%20%E9%A1%B5-2ea44f?style=for-the-badge&logo=html5&logoColor=white)](课件/Agent评测课.html)
@@ -117,7 +115,7 @@ agent-eval-course/
 ├── 参考文章/                  # 两篇原文的 PDF，保留原文配图
 │   ├── 《Agent评测白皮书》系列01：Agent评测全览.pdf
 │   └── 《Agent评测白皮书》系列02：商家AI助手的评测与优化闭环实践.pdf
-└── assets/                    # README 用到的课件截图
+└── assets/                    # README 用到的横幅与课件截图
 ```
 
 ## 📚 参考资料
